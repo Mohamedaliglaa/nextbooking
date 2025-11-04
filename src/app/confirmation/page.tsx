@@ -1,66 +1,199 @@
 // app/confirmation/page.tsx
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useBooking } from "@/contexts/BookingContext";
+import { useBooking } from "@/hooks/use-booking";
+import { useAuth } from "@/hooks/use-auth";
 import {
   ArrowLeft,
   User,
-  MapPin,
   Clock,
   DollarSign,
   Navigation,
   CreditCard,
   Wallet,
+  Shield,
 } from "lucide-react";
 import Image from "next/image";
+import { stripeService } from "@/lib/api/stripe-service";
+import StripeCheckoutProvider from "@/components/stripe/StripeCheckoutProvider";
 
-// ✅ import from our typed API client
-import {
-  RidesAPI,
-  GuestAPI,
-  type IStop,
-  type RequestRideRequest,
-  type IRide,
-} from "@/types/api";
+type PaymentMethod = "cash" | "credit_card";
 
-// Local-only (not in API types)
-type PaymentUI = "cash" | "credit_card";
-interface CardInfo {
-  card_number: string;
-  card_expiry: string;
-  card_cvc: string;
-  card_holder: string;
+interface PassengerInfo {
+  passenger_name: string;
+  passenger_email: string;
+  passenger_phone: string;
 }
 
 export default function ConfirmationPage() {
   const router = useRouter();
-  const { state, dispatch } = useBooking();
-  const [loading, setLoading] = useState(false);
+  const {
+    rideDetails,
+    passengerInfo: contextPassengerInfo,
+    paymentMethod: contextPaymentMethod,
+    setPassengerInfo,
+    setPaymentMethod,
+    requestRideWithPayment, // used when clicking
+    isProcessing,
+    setCurrentRide,
+  } = useBooking();
 
-  const [passengerInfo, setPassengerInfo] = useState({
-    passenger_name: "",
-    passenger_email: "",
-    passenger_phone: "",
+  const { isAuthenticated, user } = useAuth();
+
+  const [loadingCash, setLoadingCash] = useState(false);
+  const [loadingCard, setLoadingCard] = useState(false);
+  const [passengerInfo, setLocalPassengerInfo] = useState<PassengerInfo>({
+    passenger_name:
+      user?.first_name && user?.last_name
+        ? `${user.first_name} ${user.last_name}`
+        : "",
+    passenger_email: user?.email || "",
+    passenger_phone: user?.phone_number || "",
   });
+  const [paymentMethod, setLocalPaymentMethod] = useState<PaymentMethod>(
+    contextPaymentMethod || "credit_card"
+  );
 
-  const [paymentMethod, setPaymentMethod] = useState<PaymentUI>("credit_card");
-  const [cardInfo, setCardInfo] = useState<CardInfo>({
-    card_number: "",
-    card_expiry: "",
-    card_cvc: "",
-    card_holder: "",
-  });
+  // Stripe Embedded Checkout state
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
 
-  // Redirect back if no ride details
+  // hydrate from context if present
   useEffect(() => {
-    if (!state.rideDetails) {
-      router.push("/");
-    }
-  }, [state.rideDetails, router]);
+    if (contextPassengerInfo) setLocalPassengerInfo(contextPassengerInfo);
+    if (contextPaymentMethod) setLocalPaymentMethod(contextPaymentMethod);
+  }, [contextPassengerInfo, contextPaymentMethod]);
 
-  if (!state.rideDetails) {
+  // back to home if no details
+  useEffect(() => {
+    if (!rideDetails) router.push("/");
+  }, [rideDetails, router]);
+
+  const finalPrice = useMemo(
+    () => (rideDetails?.estimated_fare ? Number(rideDetails.estimated_fare) : 0),
+    [rideDetails]
+  );
+
+  const guestMissingBasics =
+    !isAuthenticated &&
+    (!passengerInfo.passenger_name?.trim() ||
+      !passengerInfo.passenger_phone?.trim());
+
+  // Create ride payload (reused by both flows)
+  const buildRidePayload = (method: "cash" | "stripe") => {
+    if (!rideDetails) return null;
+    const base = {
+      pickup_location: rideDetails.pickup_location,
+      dropoff_location: rideDetails.dropoff_location,
+      pickup_lat: rideDetails.pickup_lat,
+      pickup_lng: rideDetails.pickup_lng,
+      dropoff_lat: rideDetails.dropoff_lat,
+      dropoff_lng: rideDetails.dropoff_lng,
+      vehicle_type: rideDetails.vehicle_type,
+      passenger_count: 1,
+      is_scheduled: rideDetails.is_scheduled || false,
+      scheduled_at: rideDetails.scheduled_at,
+      stops: rideDetails.stops || [],
+      estimated_distance: rideDetails.estimated_distance,
+      estimated_duration: rideDetails.estimated_duration,
+      estimated_fare: finalPrice,
+      payment_method: method,
+    };
+    if (isAuthenticated) return base;
+    return {
+      ...base,
+      guest_name: passengerInfo.passenger_name || null,
+      guest_phone: passengerInfo.passenger_phone || null,
+      guest_email: passengerInfo.passenger_email || null,
+    };
+  };
+
+  /**
+   * CARD: only when clicking.
+   * 1) Create ride (payment_method 'stripe')
+   * 2) POST /payments/ride/{rideId}/checkout-session -> get clientSecret
+   * 3) Render <StripeCheckoutProvider clientSecret=... />
+   */
+  const handleCardClick = async () => {
+    if (!rideDetails) return;
+    if (guestMissingBasics) {
+      setPaymentError(
+        "Veuillez renseigner au minimum le nom et le téléphone pour continuer."
+      );
+      return;
+    }
+    setPaymentError(null);
+    setLoadingCard(true);
+    try {
+      // 1) Create the ride now (this is the first write to backend)
+      const ridePayload = buildRidePayload("stripe");
+      const ride = await requestRideWithPayment(ridePayload as any, "stripe");
+      setCurrentRide(ride);
+
+      // 2) Create checkout session for that ride
+      const session = await stripeService.createCheckoutSession(ride.id);
+      if (!session?.clientSecret) {
+        throw new Error(
+          "Client secret introuvable. Vérifiez la configuration Embedded Checkout."
+        );
+      }
+
+      // 3) Mount embedded checkout
+      setClientSecret(session.clientSecret);
+    } catch (e: any) {
+      console.error("Stripe init error:", e);
+      setPaymentError(e?.message || "Erreur lors de l'initialisation du paiement");
+    } finally {
+      setLoadingCard(false);
+    }
+  };
+
+  /**
+   * CASH: only when clicking.
+   * 1) Create ride (payment_method 'cash')
+   * 2) Redirect success
+   */
+  const handleCashClick = async () => {
+    if (!rideDetails) return;
+    if (guestMissingBasics) {
+      setPaymentError(
+        "Veuillez renseigner au minimum le nom et le téléphone pour continuer."
+      );
+      return;
+    }
+    setPaymentError(null);
+    setLoadingCash(true);
+    try {
+      const ridePayload = buildRidePayload("cash");
+      const ride = await requestRideWithPayment(ridePayload as any, "cash");
+      setCurrentRide(ride);
+      router.push("/booking-success");
+    } catch (e: any) {
+      console.error("Cash booking error:", e);
+      setPaymentError(e?.message || "Erreur lors de la réservation");
+    } finally {
+      setLoadingCash(false);
+    }
+  };
+
+  const handlePaymentMethodChange = (m: PaymentMethod) => {
+    setLocalPaymentMethod(m);
+    setPaymentError(null);
+    // if switching away from card, unmount embedded checkout
+    if (m !== "credit_card") setClientSecret(null);
+  };
+
+  const formatDuration = (minutes: number): string => {
+    if (!minutes && minutes !== 0) return "-";
+    if (minutes < 60) return `${minutes} min`;
+    const h = Math.floor(minutes / 60);
+    const mm = minutes % 60;
+    return `${h}h${mm.toString().padStart(2, "0")}`;
+  };
+
+  if (!rideDetails) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
         <div className="text-center">
@@ -71,170 +204,13 @@ export default function ConfirmationPage() {
     );
   }
 
-  const { rideDetails } = state;
-
-  // Final price (EUR) shown in UI
-  const finalPrice =
-    state.promoCode?.isValid
-      ? (rideDetails.estimated_fare || 0) - (state.promoCode.discount || 0)
-      : rideDetails.estimated_fare || 0;
-
-  // Helper: map UI method to backend enum
-  function mapPaymentForBackend(ui: PaymentUI): "cash" | "stripe" {
-    return ui === "credit_card" ? "stripe" : "cash";
-  }
-
-  // Helper: auth presence (very light)
-  function getToken(): string | null {
-    if (typeof window === "undefined") return null;
-    return (
-      localStorage.getItem("token") || sessionStorage.getItem("token")
-    );
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!passengerInfo.passenger_name || !passengerInfo.passenger_phone) {
-      alert("Veuillez remplir au moins votre nom et téléphone");
-      return;
-    }
-
-    if (paymentMethod === "credit_card") {
-      if (
-        !cardInfo.card_number ||
-        !cardInfo.card_expiry ||
-        !cardInfo.card_cvc ||
-        !cardInfo.card_holder
-      ) {
-        alert("Veuillez remplir tous les champs de la carte bancaire");
-        return;
-      }
-    }
-
-    setLoading(true);
-
-    try {
-      // Build stops for API (our type is IStop)
-      const stops: IStop[] = (rideDetails.stops || []).map(
-        (stop: string, index: number) => ({
-          location: stop,
-          lat: undefined,
-          lng: undefined,
-          order: index + 1,
-        })
-      );
-
-      // Convert finalPrice (EUR) to cents for backend
-      const estimatedFareCents = Math.round((finalPrice || 0) * 100);
-
-      const payment_method = mapPaymentForBackend(paymentMethod);
-
-      const isLoggedIn = !!getToken();
-
-      let createdRide: IRide;
-
-      if (isLoggedIn) {
-        // ✅ Authenticated flow → use RidesAPI.requestRide
-        const payload: RequestRideRequest = {
-          pickup_location: rideDetails.pickup_location,
-          dropoff_location: rideDetails.dropoff_location,
-          pickup_lat: rideDetails.pickup_lat,
-          pickup_lng: rideDetails.pickup_lng,
-          dropoff_lat: rideDetails.dropoff_lat,
-          dropoff_lng: rideDetails.dropoff_lng,
-          stops,
-          is_scheduled: rideDetails.is_scheduled || false,
-          scheduled_at: rideDetails.scheduled_at || null,
-          estimated_distance: Number(rideDetails.estimated_distance || 0), // keep unit consistent with your backend
-          estimated_duration: Number(rideDetails.estimated_duration || 0), // minutes
-          estimated_fare: estimatedFareCents, // cents
-          payment_method, // "cash" | "stripe"
-          // Note: for logged-in users we don't send guest_* here
-        };
-
-        const { ride } = await RidesAPI.requestRide(payload);
-        createdRide = ride;
-      } else {
-        // ✅ Guest flow → use GuestAPI.quickBook (includes guest fields)
-        const { ride } = await GuestAPI.quickBook({
-          pickup_location: rideDetails.pickup_location,
-          dropoff_location: rideDetails.dropoff_location,
-          pickup_lat: rideDetails.pickup_lat!,
-          pickup_lng: rideDetails.pickup_lng!,
-          dropoff_lat: rideDetails.dropoff_lat!,
-          dropoff_lng: rideDetails.dropoff_lng!,
-          estimated_distance: Number(rideDetails.estimated_distance || 0),
-          estimated_duration: Number(rideDetails.estimated_duration || 0),
-          estimated_fare: estimatedFareCents, // cents
-          guest_name: passengerInfo.passenger_name,
-          guest_phone: passengerInfo.passenger_phone,
-          guest_email: passengerInfo.passenger_email,
-        });
-
-        createdRide = ride;
-      }
-
-      // Persist minimal info in context
-      dispatch({
-        type: "SET_PASSENGER_INFO",
-        payload: passengerInfo,
-      });
-
-      // Store chosen method in your context (no custom BookingPaymentInfo type needed)
-      dispatch({
-        type: "SET_PAYMENT_METHOD",
-        payload: { method: paymentMethod },
-      });
-
-      dispatch({
-        type: "SET_CURRENT_RIDE",
-        payload: createdRide,
-      });
-
-      // If card: next step would normally be Stripe (Payment Element).
-      // For now we keep your redirect:
-      router.push("/booking-success");
-    } catch (error: any) {
-      console.error("Error creating ride:", error);
-      alert(
-        error?.message ||
-          "Une erreur est survenue lors de la réservation. Veuillez réessayer."
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handlePaymentMethodChange = (method: PaymentUI) => {
-    setPaymentMethod(method);
-    if (method !== "credit_card") {
-      setCardInfo({
-        card_number: "",
-        card_expiry: "",
-        card_cvc: "",
-        card_holder: "",
-      });
-    }
-  };
-
-  const handleCardInfoChange = (field: keyof CardInfo, value: string) => {
-    setCardInfo((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
-  };
-
   return (
     <div className="pt-24 min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-2xl mx-auto">
         {/* Header */}
         <div className="flex items-center gap-4 mb-8">
           <button
-            onClick={() => {
-              dispatch({ type: "PREVIOUS_STEP" });
-              router.push("/");
-            }}
+            onClick={() => router.push("/")}
             className="p-2 hover:bg-white rounded-lg transition-all border border-gray-200 bg-white shadow-sm"
           >
             <ArrowLeft className="h-6 w-6 text-gray-700" />
@@ -243,36 +219,49 @@ export default function ConfirmationPage() {
             <h1 className="text-3xl font-bold text-gray-900">
               Confirmer votre course
             </h1>
-            <p className="text-gray-600 mt-1">Finalisez votre réservation</p>
+            <p className="text-gray-600 mt-1">
+              Vérifiez les détails et finalisez votre réservation
+            </p>
           </div>
         </div>
 
         <div className="space-y-6">
-          {/* Destination card */}
+          {/* Estimation */}
           <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-6">
             <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <MapPin className="h-5 w-5 text-blue-600" />
-              Votre destination
+              <DollarSign className="h-5 w-5 text-green-600" />
+              Estimation de votre course
             </h2>
 
             <div className="space-y-4">
-              <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg">
-                <div className="w-3 h-3 bg-green-600 rounded-full" />
-                <div className="flex-1">
-                  <p className="font-semibold text-gray-900">Destination</p>
-                  <p className="text-gray-600 text-sm mt-1">
-                    {rideDetails.dropoff_location}
-                  </p>
+              <div className="space-y-3">
+                <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
+                  <div className="w-2 h-2 bg-green-500 rounded-full" />
+                  <div className="flex-1">
+                    <p className="font-medium text-gray-900">Départ</p>
+                    <p className="text-gray-600 text-sm mt-1">
+                      {rideDetails.pickup_location}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
+                  <div className="w-2 h-2 bg-red-500 rounded-full" />
+                  <div className="flex-1">
+                    <p className="font-medium text-gray-900">Destination</p>
+                    <p className="text-gray-600 text-sm mt-1">
+                      {rideDetails.dropoff_location}
+                    </p>
+                  </div>
                 </div>
               </div>
 
-              {/* Estimated info */}
-              <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-200">
+              <div className="grid grid-cols-3 gap-4 pt-4 border-t border-gray-200">
                 <div className="text-center p-3 bg-gray-50 rounded-lg">
                   <Clock className="h-6 w-6 text-blue-600 mx-auto mb-2" />
-                  <p className="text-sm text-gray-600">Temps estimé</p>
+                  <p className="text-sm text-gray-600">Durée</p>
                   <p className="text-lg font-bold text-gray-900">
-                    {rideDetails.estimated_duration} min
+                    {formatDuration(rideDetails.estimated_duration)}
                   </p>
                 </div>
 
@@ -283,16 +272,24 @@ export default function ConfirmationPage() {
                     {rideDetails.estimated_distance} km
                   </p>
                 </div>
+
+                <div className="text-center p-3 bg-gray-50 rounded-lg">
+                  <DollarSign className="h-6 w-6 text-yellow-600 mx-auto mb-2" />
+                  <p className="text-sm text-gray-600">Prix</p>
+                  <p className="text-lg font-bold text-gray-900">
+                    {finalPrice.toFixed(2)}€
+                  </p>
+                </div>
               </div>
 
-              {/* Selected vehicle */}
-              <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg mt-4">
+              <div className="flex items-center gap-3 p-4 bg-gradient-to-r from-blue-50 to-green-50 rounded-lg border border-blue-200 mt-4">
                 {rideDetails.vehicle?.icon && (
                   <div className="relative w-16 h-12 flex-shrink-0">
                     <Image
                       src={rideDetails.vehicle.icon}
                       alt={rideDetails.vehicle.name}
                       fill
+                      sizes="(max-width: 768px) 64px, 128px"
                       className="object-contain"
                     />
                   </div>
@@ -302,20 +299,20 @@ export default function ConfirmationPage() {
                     {rideDetails.vehicle?.name}
                   </p>
                   <p className="text-sm text-gray-600">
-                    Jusqu&apos;à {rideDetails.vehicle?.capacity} passagers
+                    Jusqu'à {rideDetails.vehicle?.capacity} passagers
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-lg font-bold text-blue-600">
+                  <p className="text-2xl font-bold text-blue-600">
                     {finalPrice.toFixed(2)} €
                   </p>
-                  <p className="text-xs text-gray-500">Prix final</p>
+                  <p className="text-xs text-gray-500">Prix final TTC</p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Personal info */}
+          {/* Infos perso */}
           <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-6">
             <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
               <User className="h-5 w-5 text-blue-600" />
@@ -325,14 +322,13 @@ export default function ConfirmationPage() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Nom complet *
+                  Nom complet {!isAuthenticated && "(requis pour réserver)"}
                 </label>
                 <input
                   type="text"
-                  required
                   value={passengerInfo.passenger_name}
                   onChange={(e) =>
-                    setPassengerInfo((prev) => ({
+                    setLocalPassengerInfo((prev) => ({
                       ...prev,
                       passenger_name: e.target.value,
                     }))
@@ -344,14 +340,13 @@ export default function ConfirmationPage() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Téléphone *
+                  Téléphone {!isAuthenticated && "(requis pour réserver)"}
                 </label>
                 <input
                   type="tel"
-                  required
                   value={passengerInfo.passenger_phone}
                   onChange={(e) =>
-                    setPassengerInfo((prev) => ({
+                    setLocalPassengerInfo((prev) => ({
                       ...prev,
                       passenger_phone: e.target.value,
                     }))
@@ -363,13 +358,14 @@ export default function ConfirmationPage() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Email (optionnel)
+                  Email {isAuthenticated ? "(obligatoire)" : "(optionnel)"}
                 </label>
                 <input
                   type="email"
+                  required={isAuthenticated}
                   value={passengerInfo.passenger_email}
                   onChange={(e) =>
-                    setPassengerInfo((prev) => ({
+                    setLocalPassengerInfo((prev) => ({
                       ...prev,
                       passenger_email: e.target.value,
                     }))
@@ -381,7 +377,7 @@ export default function ConfirmationPage() {
             </div>
           </div>
 
-          {/* Payment method */}
+          {/* Paiement */}
           <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-6">
             <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
               <CreditCard className="h-5 w-5 text-blue-600" />
@@ -395,8 +391,8 @@ export default function ConfirmationPage() {
                   onClick={() => handlePaymentMethodChange("cash")}
                   className={`p-4 border-2 rounded-lg text-left transition-all ${
                     paymentMethod === "cash"
-                      ? "border-blue-500 bg-blue-50"
-                      : "border-gray-200 hover:border-gray-300"
+                      ? "border-blue-500 bg-blue-50 shadow-sm"
+                      : "border-gray-200 hover:border-gray-300 bg-white"
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -423,8 +419,8 @@ export default function ConfirmationPage() {
                   onClick={() => handlePaymentMethodChange("credit_card")}
                   className={`p-4 border-2 rounded-lg text-left transition-all ${
                     paymentMethod === "credit_card"
-                      ? "border-blue-500 bg-blue-50"
-                      : "border-gray-200 hover:border-gray-300"
+                      ? "border-blue-500 bg-blue-50 shadow-sm"
+                      : "border-gray-200 hover:border-gray-300 bg-white"
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -440,7 +436,7 @@ export default function ConfirmationPage() {
                         Carte bancaire
                       </p>
                       <p className="text-sm text-gray-600 mt-1">
-                        Paiement sécurisé
+                        Paiement sécurisé Stripe
                       </p>
                     </div>
                   </div>
@@ -448,129 +444,89 @@ export default function ConfirmationPage() {
               </div>
 
               {paymentMethod === "credit_card" && (
-                <div className="space-y-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Numéro de carte *
-                    </label>
-                    <input
-                      type="text"
-                      value={cardInfo.card_number}
-                      onChange={(e) =>
-                        handleCardInfoChange("card_number", e.target.value)
-                      }
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                      placeholder="1234 5678 9012 3456"
-                      maxLength={19}
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Date d&apos;expiration *
-                      </label>
-                      <input
-                        type="text"
-                        value={cardInfo.card_expiry}
-                        onChange={(e) =>
-                          handleCardInfoChange("card_expiry", e.target.value)
-                        }
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                        placeholder="MM/AA"
-                        maxLength={5}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        CVC *
-                      </label>
-                      <input
-                        type="text"
-                        value={cardInfo.card_cvc}
-                        onChange={(e) =>
-                          handleCardInfoChange("card_cvc", e.target.value)
-                        }
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                        placeholder="123"
-                        maxLength={3}
-                      />
+                <div className="space-y-4">
+                  <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                    <div className="flex items-center gap-3">
+                      <Shield className="h-5 w-5 text-blue-600" />
+                      <div>
+                        <p className="font-semibold text-blue-800">
+                          Paiement sécurisé Stripe
+                        </p>
+                        <p className="text-sm text-blue-700 mt-1">
+                          Cliquez sur « Payer par carte » pour ouvrir le
+                          formulaire.
+                        </p>
+                      </div>
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Titulaire de la carte *
-                    </label>
-                    <input
-                      type="text"
-                      value={cardInfo.card_holder}
-                      onChange={(e) =>
-                        handleCardInfoChange("card_holder", e.target.value)
-                      }
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                      placeholder="Nom comme sur la carte"
-                    />
-                  </div>
+                  {!clientSecret && (
+                    <button
+                      onClick={handleCardClick}
+                      disabled={loadingCard || guestMissingBasics}
+                      className="w-full py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-all disabled:opacity-60"
+                    >
+                      {loadingCard ? "Initialisation..." : "Payer par carte"}
+                    </button>
+                  )}
 
-                  <div className="bg-blue-50 p-3 rounded-lg">
-                    <p className="text-xs text-blue-700">
-                      🔒 Paiement sécurisé - Vos informations bancaires sont
-                      cryptées et protégées
-                    </p>
-                  </div>
+                  {clientSecret && (
+                    <div id="checkout" className="bg-white p-0 rounded-lg">
+                      <StripeCheckoutProvider clientSecret={clientSecret} />
+                    </div>
+                  )}
+
+                  {paymentError && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                      <p className="text-red-800 font-medium">Erreur de paiement</p>
+                      <p className="text-red-600 text-sm mt-1">{paymentError}</p>
+                    </div>
+                  )}
                 </div>
               )}
 
               {paymentMethod === "cash" && (
-                <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                  <div className="flex items-center gap-3">
-                    <Wallet className="h-5 w-5 text-green-600" />
-                    <div>
-                      <p className="font-semibold text-green-800">
-                        Paiement en espèces
-                      </p>
-                      <p className="text-sm text-green-700 mt-1">
-                        Vous réglerez le montant de {finalPrice.toFixed(2)} € directement au chauffeur à la fin du trajet.
-                      </p>
+                <div className="space-y-4">
+                  <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+                    <div className="flex items-center gap-3">
+                      <Wallet className="h-5 w-5 text-green-600" />
+                      <div>
+                        <p className="font-semibold text-green-800">
+                          Paiement en espèces
+                        </p>
+                        <p className="text-sm text-green-700 mt-1">
+                          Vous réglerez {finalPrice.toFixed(2)} € directement au
+                          chauffeur à la fin du trajet.
+                        </p>
+                      </div>
                     </div>
                   </div>
+
+                  <button
+                    onClick={handleCashClick}
+                    disabled={loadingCash || guestMissingBasics}
+                    className="w-full py-4 bg-gradient-to-r from-green-600 to-green-700 text-white font-bold rounded-lg hover:from-green-700 hover:to-green-800 disabled:bg-gray-400 disabled:cursor-not-allowed transition-all text-lg shadow-lg flex items-center justify-center gap-2"
+                  >
+                    {loadingCash ? (
+                      <>
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
+                        Réservation en cours...
+                      </>
+                    ) : (
+                      <>
+                        <Wallet className="h-5 w-5" />
+                        Confirmer la réservation - {finalPrice.toFixed(2)} €
+                      </>
+                    )}
+                  </button>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Confirm button */}
-          <button
-            onClick={handleSubmit}
-            disabled={
-              loading ||
-              !passengerInfo.passenger_name ||
-              !passengerInfo.passenger_phone
-            }
-            className="w-full py-4 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-all text-lg shadow-lg flex items-center justify-center gap-2"
-          >
-            {loading ? (
-              <>
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
-                Réservation en cours...
-              </>
-            ) : (
-              <>
-                <DollarSign className="h-5 w-5" />
-                {paymentMethod === "cash"
-                  ? `Confirmer la réservation - Payer ${finalPrice.toFixed(
-                      2
-                    )} € en espèces`
-                  : `Payer ${finalPrice.toFixed(2)} € par carte`}
-              </>
-            )}
-          </button>
-
-          <div className="bg-gray-50 rounded-lg p-4 text-center">
+          <div className="bg-gray-50 rounded-lg p-4 text-center border border-gray-200">
             <p className="text-xs text-gray-600">
-              ✓ Paiement sécurisé • ✓ Chauffeur vérifié • ✓ Trajet optimal
+              ✓ Paiement 100% sécurisé • ✓ Chauffeur vérifié • ✓ Prix transparent
             </p>
           </div>
         </div>

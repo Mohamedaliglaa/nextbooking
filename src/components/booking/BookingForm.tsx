@@ -1,11 +1,13 @@
 // components/BookingForm.tsx
 'use client';
 import React, { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { MapPin, Navigation, Plus, X, ArrowDownUp, Clock, Calendar, Car, DollarSign, AlertCircle } from 'lucide-react';
-import { VehicleOption } from '@/types/booking';
+import { VehicleOption, RideEstimation } from '@/types/booking';
 import { calculateEstimatedFare } from '@/lib/utils';
 import Image from 'next/image';
 import { useToast } from '@/hooks/use-toast';
+import { useBooking } from '@/hooks/use-booking';
 
 // Déclaration du type pour Google Maps
 declare global {
@@ -42,15 +44,10 @@ const vehicles: VehicleOption[] = [
   },
 ];
 
-interface EstimationResult {
-  price: number;
-  distance: number;
-  duration: number;
-  vehicle: VehicleOption;
-}
-
 export default function BookingForm() {
+  const router = useRouter();
   const { toast } = useToast();
+  const { setRideDetails } = useBooking();
   
   const [departure, setDeparture] = useState<string>('');
   const [destination, setDestination] = useState<string>('');
@@ -60,8 +57,6 @@ export default function BookingForm() {
   const [timeOption, setTimeOption] = useState<'now' | 'scheduled'>('now');
   const [scheduledDate, setScheduledDate] = useState<string>('');
   const [scheduledTime, setScheduledTime] = useState<string>('');
-  const [estimation, setEstimation] = useState<EstimationResult | null>(null);
-  const [showEstimation, setShowEstimation] = useState<boolean>(false);
 
   // Références pour les inputs
   const departureRef = useRef<HTMLInputElement>(null);
@@ -105,9 +100,6 @@ export default function BookingForm() {
         const place = departureAutocomplete.getPlace();
         if (place.formatted_address) {
           setDeparture(place.formatted_address);
-          // Reset estimation when address changes
-          setEstimation(null);
-          setShowEstimation(false);
         }
       });
     }
@@ -119,9 +111,6 @@ export default function BookingForm() {
         const place = destinationAutocomplete.getPlace();
         if (place.formatted_address) {
           setDestination(place.formatted_address);
-          // Reset estimation when address changes
-          setEstimation(null);
-          setShowEstimation(false);
         }
       });
     }
@@ -134,9 +123,6 @@ export default function BookingForm() {
           const place = stopAutocomplete.getPlace();
           if (place.formatted_address) {
             updateStop(index, place.formatted_address);
-            // Reset estimation when stops change
-            setEstimation(null);
-            setShowEstimation(false);
           }
         });
       }
@@ -163,12 +149,8 @@ export default function BookingForm() {
             setDeparture(`${latitude}, ${longitude}`);
           }
           setLoading(false);
-          // Reset estimation when location changes
-          setEstimation(null);
-          setShowEstimation(false);
         },
         (error) => {
-          // Use toast methods correctly
           toast.error('Erreur de géolocalisation', 'Impossible d\'obtenir votre position actuelle');
           setLoading(false);
         }
@@ -183,34 +165,22 @@ export default function BookingForm() {
     const temp = departure;
     setDeparture(destination);
     setDestination(temp);
-    // Reset estimation when addresses are switched
-    setEstimation(null);
-    setShowEstimation(false);
   };
 
   const addStop = () => {
     setStops([...stops, '']);
     setTimeout(initializeAutocomplete, 100);
-    // Reset estimation when stops are added
-    setEstimation(null);
-    setShowEstimation(false);
   };
 
   const removeStop = (index: number) => {
     setStops(stops.filter((_, i) => i !== index));
     stopsRefs.current.splice(index, 1);
-    // Reset estimation when stops are removed
-    setEstimation(null);
-    setShowEstimation(false);
   };
 
   const updateStop = (index: number, value: string) => {
     const newStops = [...stops];
     newStops[index] = value;
     setStops(newStops);
-    // Reset estimation when stops are updated
-    setEstimation(null);
-    setShowEstimation(false);
   };
 
   const handleVehicleSelection = (vehicleId: string) => {
@@ -218,10 +188,6 @@ export default function BookingForm() {
       return;
     }
     setVehicleType(vehicleId);
-    // Recalculate estimation if we already have one
-    if (estimation) {
-      calculateEstimation();
-    }
   };
 
   const calculateEstimation = async () => {
@@ -231,8 +197,6 @@ export default function BookingForm() {
     }
 
     setLoading(true);
-    setEstimation(null);
-    setShowEstimation(false);
 
     try {
       // Utiliser Google Distance Matrix pour une estimation précise
@@ -272,17 +236,28 @@ export default function BookingForm() {
             basePrices
           );
 
-          const result: EstimationResult = {
-            price: estimatedPrice,
-            distance: Math.round(totalDistance * 10) / 10,
-            duration: Math.round(totalDuration),
-            vehicle: vehicle!
+          // Create estimation data for confirmation page
+          const estimationData: RideEstimation = {
+            pickup_location: departure,
+            dropoff_location: destination,
+            pickup_lat: 48.8566, // Default Paris coordinates - you can get these from geocoding
+            pickup_lng: 2.3522,
+            dropoff_lat: 48.8606,
+            dropoff_lng: 2.3376,
+            vehicle_type: vehicleType,
+            vehicle: vehicle,
+            passenger_count: 1,
+            is_scheduled: timeOption === 'scheduled',
+            scheduled_at: timeOption === 'scheduled' ? `${scheduledDate}T${scheduledTime}` : undefined,
+            stops: stops,
+            estimated_distance: Math.round(totalDistance * 10) / 10,
+            estimated_duration: Math.round(totalDuration),
+            estimated_fare: estimatedPrice,
           };
 
-          setEstimation(result);
-          setShowEstimation(true);
-          
-          toast.success('Estimation calculée', `Prix estimé: ${estimatedPrice.toFixed(2)}€`);
+          // Save to booking store and redirect to confirmation
+          setRideDetails(estimationData);
+          router.push('/confirmation');
 
         } else {
           // Fallback si l'API échoue
@@ -312,26 +287,28 @@ export default function BookingForm() {
       basePrices
     );
 
-    const result: EstimationResult = {
-      price: estimatedPrice,
-      distance: baseDistance,
-      duration: baseDistance * 2,
-      vehicle: vehicle!
+    // Create estimation data for confirmation page
+    const estimationData: RideEstimation = {
+      pickup_location: departure,
+      dropoff_location: destination,
+      pickup_lat: 48.8566,
+      pickup_lng: 2.3522,
+      dropoff_lat: 48.8606,
+      dropoff_lng: 2.3376,
+      vehicle_type: vehicleType,
+      vehicle: vehicle,
+      passenger_count: 1,
+      is_scheduled: timeOption === 'scheduled',
+      scheduled_at: timeOption === 'scheduled' ? `${scheduledDate}T${scheduledTime}` : undefined,
+      stops: stops,
+      estimated_distance: baseDistance,
+      estimated_duration: baseDistance * 2,
+      estimated_fare: estimatedPrice,
     };
 
-    setEstimation(result);
-    setShowEstimation(true);
-    
-    toast.info('Estimation approximative', `Prix estimé: ${estimatedPrice.toFixed(2)}€ (calcul approximatif)`);
-  };
-
-  const formatDuration = (minutes: number): string => {
-    if (minutes < 60) {
-      return `${minutes} min`;
-    }
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = minutes % 60;
-    return `${hours}h${remainingMinutes.toString().padStart(2, '0')}`;
+    // Save to booking store and redirect to confirmation
+    setRideDetails(estimationData);
+    router.push('/confirmation');
   };
 
   return (
@@ -339,35 +316,6 @@ export default function BookingForm() {
       <div className="">
         <div className="bg-card rounded-xl shadow-lg border border-border overflow-hidden">
           <div className="flex flex-col gap-2 p-6">
-            {/* Estimation Result */}
-            {showEstimation && estimation && (
-              <div className="mb-6 p-4 bg-gradient-to-r from-chart-1/10 to-chart-2/10 border border-chart-1/20 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-bold text-lg text-card-foreground">
-                      {estimation.price.toFixed(2)}€
-                    </h3>
-                    <p className="text-sm text-muted-foreground">
-                      {estimation.distance} km • {formatDuration(estimation.duration)}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {estimation.vehicle.name} • Estimation indicative
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <div className="w-12 h-12 relative">
-                      <Image
-                        src={estimation.vehicle.icon}
-                        alt={estimation.vehicle.name}
-                        fill
-                        className="object-contain"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
             {/* Form Sections */}
             <div className="space-y-4">
               {/* Adresse de départ */}
@@ -382,11 +330,7 @@ export default function BookingForm() {
                       ref={departureRef}
                       type="text"
                       value={departure}
-                      onChange={(e) => {
-                        setDeparture(e.target.value);
-                        setEstimation(null);
-                        setShowEstimation(false);
-                      }}
+                      onChange={(e) => setDeparture(e.target.value)}
                       placeholder="Adresse de départ"
                       autoComplete="street-address"
                       className="w-full px-4 py-3 text-sm bg-background border border-input rounded-lg focus:ring-2 focus:ring-ring focus:border-transparent transition-all"
@@ -405,7 +349,7 @@ export default function BookingForm() {
               </div>
 
               {/* Switch Button */}
-              <div className="flex justify-center">
+              <div className="absolute right-10 top-26">
                 <button
                   type="button"
                   onClick={switchAddresses}
@@ -426,11 +370,7 @@ export default function BookingForm() {
                   ref={destinationRef}
                   type="text"
                   value={destination}
-                  onChange={(e) => {
-                    setDestination(e.target.value);
-                    setEstimation(null);
-                    setShowEstimation(false);
-                  }}
+                  onChange={(e) => setDestination(e.target.value)}
                   placeholder="Adresse de destination"
                   autoComplete="street-address"
                   className="w-full px-4 py-3 text-sm bg-background border border-input rounded-lg focus:ring-2 focus:ring-ring focus:border-transparent transition-all"
@@ -449,11 +389,7 @@ export default function BookingForm() {
                       ref={el => { stopsRefs.current[index] = el }}
                       type="text"
                       value={stop}
-                      onChange={(e) => {
-                        updateStop(index, e.target.value);
-                        setEstimation(null);
-                        setShowEstimation(false);
-                      }}
+                      onChange={(e) => updateStop(index, e.target.value)}
                       placeholder="Adresse de l'arrêt"
                       autoComplete="street-address"
                       className="flex-1 px-4 py-3 text-sm bg-background border border-input rounded-lg focus:ring-2 focus:ring-ring focus:border-transparent transition-all"
@@ -483,10 +419,7 @@ export default function BookingForm() {
 
             {/* Type de véhicule */}
             <div>
-              <label className="block text-sm font-semibold text-card-foreground mb-3">
-                <Car className="inline h-4 w-4 mr-2 text-chart-4" />
-                Type de véhicule
-              </label>
+              
               <div className="grid grid-cols-3 gap-3">
                 {vehicles.map((vehicle) => {
                   const isDisabled = vehicle.id === 'van' && isVanDisabled;
@@ -540,10 +473,7 @@ export default function BookingForm() {
 
             {/* Maintenant ou Planifier */}
             <div>
-              <label className="block text-sm font-semibold text-card-foreground mb-3">
-                <Clock className="inline h-4 w-4 mr-2 text-chart-5" />
-                Quand souhaitez-vous partir ?
-              </label>
+              
               <div className="grid grid-cols-2 gap-3 mb-4">
                 <button
                   type="button"
@@ -615,7 +545,7 @@ export default function BookingForm() {
                 ) : (
                   <>
                     <DollarSign className="h-5 w-5" />
-                    Calculer le prix
+                    Faire une estimation
                   </>
                 )}
               </button>

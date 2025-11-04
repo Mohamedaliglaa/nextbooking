@@ -4,15 +4,8 @@ import { useBookingStore } from '@/lib/store/booking-store';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { useUIStore } from '@/lib/store/ui-store';
 import { rideService } from '@/lib/api/ride-service';
-import { promotionService } from '@/lib/api/promotion-service';
-import { 
-  RideEstimation, 
-  RideRequest, 
-  GuestRideRequest,
-  Ride,
-  PassengerInfo 
-} from '@/types/booking';
-import { PromoCode } from '@/types/api';
+import { useStripePayment } from './use-stripe-payment';
+import { RideEstimation, RideRequest, GuestRideRequest, Ride, PassengerInfo } from '@/types/booking';
 
 export const useBooking = () => {
   const [isEstimating, setIsEstimating] = useState(false);
@@ -34,6 +27,60 @@ export const useBooking = () => {
   
   const { isAuthenticated, user } = useAuthStore();
   const { setLoading, addToast } = useUIStore();
+  const { processCheckoutSession, processCashPayment, isProcessing } = useStripePayment();
+
+  const requestRideWithPayment = useCallback(async (
+    rideRequest: RideRequest | GuestRideRequest, 
+    paymentMethod: 'cash' | 'stripe'
+  ): Promise<Ride> => {
+    setIsRequesting(true);
+    setLoading('ride', true);
+    
+    try {
+      // 1. Create the ride
+      const ride = await rideService.requestRide({
+        ...rideRequest,
+        payment_method: paymentMethod,
+      });
+      
+      setCurrentRide(ride);
+
+      // 2. Handle payment based on method
+      if (paymentMethod === 'stripe') {
+        // Redirect to Stripe Checkout
+        const sessionId = await processCheckoutSession(ride.id);
+        if (sessionId) {
+          // Store session ID for verification later
+          localStorage.setItem(`stripe_session_${ride.id}`, sessionId);
+        }
+        // The redirect happens in processCheckoutSession, so we return here
+        return ride;
+      } else {
+        // Process cash payment
+        const guestPhone = !isAuthenticated && 'guest_phone' in rideRequest ? rideRequest.guest_phone : undefined;
+        await processCashPayment(ride.id, guestPhone);
+        
+        addToast({
+          type: 'success',
+          title: 'Réservation confirmée',
+          description: 'Votre course a été réservée. Paiement en espèces à la fin du trajet.',
+        });
+        
+        return ride;
+      }
+
+    } catch (error: any) {
+      addToast({
+        type: 'error',
+        title: 'Erreur de réservation',
+        description: error.message || 'Impossible de créer la course',
+      });
+      throw error;
+    } finally {
+      setIsRequesting(false);
+      setLoading('ride', false);
+    }
+  }, [setCurrentRide, setLoading, addToast, processCheckoutSession, processCashPayment, isAuthenticated]);
 
   const estimateRide = useCallback(async (estimationData: Partial<RideEstimation>) => {
     setIsEstimating(true);
@@ -53,105 +100,6 @@ export const useBooking = () => {
     }
   }, [setRideDetails, addToast]);
 
-  const requestRide = useCallback(async (rideRequest: RideRequest | GuestRideRequest): Promise<Ride> => {
-    setIsRequesting(true);
-    setLoading('ride', true);
-    
-    try {
-      const ride = await rideService.requestRide(rideRequest);
-      setCurrentRide(ride);
-      
-      addToast({
-        type: 'success',
-        title: 'Course demandée',
-        description: 'Recherche d\'un chauffeur en cours...',
-      });
-      
-      return ride;
-    } catch (error: any) {
-      addToast({
-        type: 'error',
-        title: 'Erreur de réservation',
-        description: error.message || 'Impossible de créer la course',
-      });
-      throw error;
-    } finally {
-      setIsRequesting(false);
-      setLoading('ride', false);
-    }
-  }, [setCurrentRide, setLoading, addToast]);
-
-  const cancelRide = useCallback(async (rideId: number, reason?: string) => {
-    setLoading('ride', true);
-    try {
-      const ride = await rideService.cancelRide(rideId, reason);
-      setCurrentRide(ride);
-      
-      addToast({
-        type: 'success',
-        title: 'Course annulée',
-        description: 'Votre course a été annulée avec succès',
-      });
-      
-      return ride;
-    } catch (error: any) {
-      addToast({
-        type: 'error',
-        title: 'Erreur d\'annulation',
-        description: error.message || 'Impossible d\'annuler la course',
-      });
-      throw error;
-    } finally {
-      setLoading('ride', false);
-    }
-  }, [setCurrentRide, setLoading, addToast]);
-
-  const validatePromoCode = useCallback(async (code: string, rideAmount?: number) => {
-    try {
-      const promo = await promotionService.validatePromoCode(code, rideAmount);
-      setPromoCode(promo);
-      
-      if (promo.isValid) {
-        addToast({
-          type: 'success',
-          title: 'Code promo appliqué',
-          description: promo.message,
-        });
-      } else {
-        addToast({
-          type: 'error',
-          title: 'Code promo invalide',
-          description: promo.message,
-        });
-      }
-      
-      return promo;
-    } catch (error: any) {
-      addToast({
-        type: 'error',
-        title: 'Erreur de validation',
-        description: error.message || 'Impossible de valider le code promo',
-      });
-      throw error;
-    }
-  }, [setPromoCode, addToast]);
-
-  const clearPromoCode = useCallback(() => {
-    setPromoCode(null);
-  }, [setPromoCode]);
-
-  const refreshCurrentRide = useCallback(async () => {
-    if (!currentRide) return;
-    
-    try {
-      const ride = await rideService.getRide(currentRide.id);
-      setCurrentRide(ride);
-      return ride;
-    } catch (error) {
-      console.error('Failed to refresh ride:', error);
-    }
-  }, [currentRide, setCurrentRide]);
-
   return {
     // State
     rideDetails,
@@ -161,20 +109,18 @@ export const useBooking = () => {
     promoCode,
     isEstimating,
     isRequesting,
+    isProcessing,
     isAuthenticated,
     user,
     
     // Actions
     estimateRide,
-    requestRide,
-    cancelRide,
+    requestRideWithPayment,
     setRideDetails,
     setPassengerInfo,
     setPaymentMethod,
     setCurrentRide,
-    validatePromoCode,
-    clearPromoCode,
-    refreshCurrentRide,
+    setPromoCode,
     clearBooking,
   };
 };

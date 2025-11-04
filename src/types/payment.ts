@@ -1,4 +1,4 @@
-import { User } from "./auth";
+import { User } from ".";
 import { Ride } from "./booking";
 
 // types/payment.ts
@@ -27,25 +27,14 @@ export interface Payment {
   ride?: Ride;
   passenger?: User;
 }
-
 export interface CheckoutSessionResponse {
   clientSecret: string;
   checkoutSessionId: string;
-  amount: number;
-  currency: string;
+  amount: number;   // cents
+  currency: string; // e.g., "eur"
+  successUrl?: string; // may be included by backend
+  cancelUrl?: string;  // may be included by backend
 }
-
-export interface CheckoutSessionStatus {
-  status: string;
-  payment_status: string;
-  payment_intent_status?: string;
-  customer_email: string;
-  amount_total: number;
-  currency: string;
-  payment_id?: number;
-  ride_id?: number;
-}
-
 export interface PaymentIntentResponse {
   clientSecret: string;
   paymentIntentId: string;
@@ -54,6 +43,18 @@ export interface PaymentIntentResponse {
   status: string;
   reused?: boolean;
 }
+
+export interface CheckoutSessionStatus {
+  status: string;                 // session.status
+  payment_status: string;         // session.payment_status
+  payment_intent_status?: string; // session.payment_intent.status (expanded)
+  customer_email: string | null;
+  amount_total: number;
+  currency: string;
+  payment_id?: number;
+  ride_id?: number;
+}
+
 
 export interface ProcessPaymentRequest {
   method: 'cash' | 'wallet' | 'stripe' | 'credit_card';
