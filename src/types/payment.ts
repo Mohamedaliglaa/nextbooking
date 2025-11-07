@@ -44,17 +44,20 @@ export interface PaymentIntentResponse {
   reused?: boolean;
 }
 
+// In your types.ts file
 export interface CheckoutSessionStatus {
-  status: string;                 // session.status
-  payment_status: string;         // session.payment_status
-  payment_intent_status?: string; // session.payment_intent.status (expanded)
-  customer_email: string | null;
+  status: string;
+  payment_status: string;
+  payment_intent_status?: string;
+  customer_name?: string;
+  customer_email?: string;
   amount_total: number;
   currency: string;
   payment_id?: number;
   ride_id?: number;
+  payment_updated?: boolean;
+  email_sent?: boolean;      
 }
-
 
 export interface ProcessPaymentRequest {
   method: 'cash' | 'wallet' | 'stripe' | 'credit_card';

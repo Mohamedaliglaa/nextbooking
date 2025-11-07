@@ -3,22 +3,26 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { CheckCircle, XCircle, Clock } from "lucide-react";
-import { stripeService } from "@/lib/api/stripe-service"; // ⬅️ use your service
+import { CheckCircle, XCircle, Clock, Mail } from "lucide-react";
+import { stripeService } from "@/lib/api/stripe-service";
 import type { CheckoutSessionStatus } from "@/types";
+
+interface PaymentDetails extends CheckoutSessionStatus {
+  payment_updated?: boolean;
+  email_sent?: boolean;
+}
 
 export default function PaymentSuccessPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [status, setStatus] = useState<"loading" | "success" | "error">(
-    "loading"
-  );
+  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
-  const [paymentDetails, setPaymentDetails] = useState<CheckoutSessionStatus | null>(null);
+  const [paymentDetails, setPaymentDetails] = useState<PaymentDetails | null>(null);
+  const [emailStatus, setEmailStatus] = useState<"pending" | "sent" | "failed">("pending");
 
   useEffect(() => {
-    const verifyPayment = async () => {
+    const confirmPayment = async () => {
       try {
         const sessionId = searchParams.get("session_id");
 
@@ -36,31 +40,58 @@ export default function PaymentSuccessPage() {
           );
         }
 
-        console.log("Verifying payment for session:", sessionId);
+        console.log("Confirming payment for session:", sessionId);
 
-        // 🔁 Use the service (which uses apiClient)
-        const paymentStatus = await stripeService.verifyPaymentStatus(sessionId);
+        // 🆕 USE THE NEW confirmPayment METHOD (this updates status AND sends email)
+        const paymentStatus = await stripeService.confirmPayment(sessionId);
 
         setPaymentDetails(paymentStatus);
+
+        // Check if email was sent
+        if (paymentStatus.email_sent) {
+          setEmailStatus("sent");
+        } else {
+          setEmailStatus("failed");
+        }
 
         if (
           paymentStatus.payment_status === "paid" ||
           paymentStatus.payment_intent_status === "succeeded"
         ) {
           setStatus("success");
+          
+          // If payment is successful but email wasn't sent, try to send it again
+          if (!paymentStatus.email_sent) {
+            console.log("Payment successful but email not sent, retrying...");
+            setTimeout(() => retryEmail(sessionId), 2000);
+          }
         } else {
           setStatus("error");
           setError(`Statut du paiement: ${paymentStatus.payment_status}`);
         }
       } catch (err: any) {
-        console.error("Payment verification error:", err);
+        console.error("Payment confirmation error:", err);
         setStatus("error");
-        setError(err?.message || "Échec de la vérification du paiement");
+        setError(err?.message || "Échec de la confirmation du paiement");
+      }
+    };
+
+    const retryEmail = async (sessionId: string) => {
+      try {
+        console.log("Retrying email for session:", sessionId);
+        const paymentStatus = await stripeService.confirmPayment(sessionId);
+        
+        if (paymentStatus.email_sent) {
+          setEmailStatus("sent");
+          setPaymentDetails(prev => prev ? { ...prev, email_sent: true } : null);
+        }
+      } catch (err) {
+        console.error("Failed to retry email:", err);
       }
     };
 
     if (searchParams) {
-      void verifyPayment();
+      void confirmPayment();
     }
   }, [searchParams]);
 
@@ -76,8 +107,27 @@ export default function PaymentSuccessPage() {
     }
   };
 
+  const handleRetryEmail = async () => {
+    const sessionId = searchParams.get("session_id");
+    if (!sessionId) return;
+
+    setEmailStatus("pending");
+    try {
+      const paymentStatus = await stripeService.confirmPayment(sessionId);
+      if (paymentStatus.email_sent) {
+        setEmailStatus("sent");
+        setPaymentDetails(prev => prev ? { ...prev, email_sent: true } : null);
+      } else {
+        setEmailStatus("failed");
+      }
+    } catch (err) {
+      console.error("Failed to retry email:", err);
+      setEmailStatus("failed");
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+    <div className="pt-24 min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
         {status === "loading" && (
           <div className="text-center">
@@ -87,8 +137,8 @@ export default function PaymentSuccessPage() {
                 <div className="absolute inset-0 animate-spin rounded-full border-b-2 border-blue-600"></div>
               </div>
             </div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">Vérification en cours</h2>
-            <p className="text-gray-600 mb-6">Nous confirmons votre paiement...</p>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Confirmation en cours</h2>
+            <p className="text-gray-600 mb-6">Nous finalisons votre paiement et préparons votre confirmation...</p>
             <div className="bg-blue-50 rounded-lg p-4">
               <p className="text-sm text-blue-700">
                 Cette opération peut prendre quelques secondes
@@ -125,6 +175,28 @@ export default function PaymentSuccessPage() {
                       <span className="font-semibold">#{paymentDetails.ride_id}</span>
                     </div>
                   )}
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Email de confirmation:</span>
+                    <div className="flex items-center gap-2">
+                      {emailStatus === "sent" && (
+                        <span className="flex items-center gap-1 text-green-600 text-xs">
+                          <Mail className="h-3 w-3" />
+                          Envoyé
+                        </span>
+                      )}
+                      {emailStatus === "pending" && (
+                        <span className="text-yellow-600 text-xs">En cours...</span>
+                      )}
+                      {emailStatus === "failed" && (
+                        <button
+                          onClick={handleRetryEmail}
+                          className="text-red-600 text-xs underline hover:text-red-700"
+                        >
+                          Réessayer
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -144,9 +216,11 @@ export default function PaymentSuccessPage() {
               </button>
             </div>
 
-            <p className="text-xs text-gray-500 mt-6">
-              Un email de confirmation vous a été envoyé.
-            </p>
+            {emailStatus === "sent" && (
+              <p className="text-xs text-gray-500 mt-6">
+                Un email de confirmation vous a été envoyé à {paymentDetails?.customer_email}.
+              </p>
+            )}
           </div>
         )}
 

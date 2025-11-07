@@ -34,8 +34,7 @@ export const stripeService = {
     return pick(resp);
   },
 
-// stripe-service.ts
- async verifyPaymentStatus(sessionId: string): Promise<CheckoutSessionStatus> {
+  async verifyPaymentStatus(sessionId: string): Promise<CheckoutSessionStatus> {
     try {
       const resp = await apiClient.get<CheckoutSessionStatus>(
         `/payments/session/${encodeURIComponent(sessionId)}/status`
@@ -43,6 +42,26 @@ export const stripeService = {
       const data = pick<CheckoutSessionStatus>(resp);
       // sanity log
       console.log('verifyPaymentStatus payload:', data);
+      return data;
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.error ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'An error occurred';
+      throw new Error(msg);
+    }
+  },
+
+  // 🆕 NEW: Confirm checkout session (updates payment status and sends email)
+  async confirmPayment(sessionId: string): Promise<CheckoutSessionStatus> {
+    try {
+      const resp = await apiClient.post<CheckoutSessionStatus>(
+        `/payments/session/${encodeURIComponent(sessionId)}/confirm`
+      );
+      const data = pick<CheckoutSessionStatus & { payment_updated?: boolean; email_sent?: boolean }>(resp);
+      // sanity log
+      console.log('confirmPayment payload:', data);
       return data;
     } catch (err: any) {
       const msg =
