@@ -5,7 +5,7 @@ import { Star, Shield, Clock, Users } from 'lucide-react';
 
 export default function Hero() {
   return (
-    <section className="relative min-h-screen flex items-center bg-gradient-to-br from-background via-blue-50/30 to-background px-4 sm:px-6 py-16 sm:py-24 overflow-hidden">
+    <section className="relative min-h-screen flex items-center bg-gradient-to-br from-background via-blue-50/30 to-background px-4 sm:px-6 overflow-hidden">
       
       {/* Background Elements */}
       <div className="absolute inset-0 overflow-hidden">

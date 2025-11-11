@@ -1,18 +1,26 @@
 // lib/api/client.ts
-import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
+import axios, {
+  AxiosInstance,
+  AxiosResponse,
+  AxiosError,
+  AxiosRequestConfig,
+} from 'axios';
 import { ApiResponse, ApiError } from '@/types/api';
 
 class ApiClient {
   private client: AxiosInstance;
   private token: string | null = null;
 
+  // listeners for 401 -> allow store to reset quickly
+  private unauthorizedHandlers = new Set<() => void>();
+
   constructor() {
     this.client = axios.create({
       baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api',
       timeout: 30000,
       headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
+        // Don't force JSON here so FormData works automatically
+        Accept: 'application/json',
       },
     });
 
@@ -20,25 +28,44 @@ class ApiClient {
     this.loadToken();
   }
 
+  /** Subscribe to 401 Unauthorized events */
+  onUnauthorized(handler: () => void) {
+    this.unauthorizedHandlers.add(handler);
+    // return unsubscribe
+    return () => this.unauthorizedHandlers.delete(handler);
+  }
+
+  private notifyUnauthorized() {
+    this.unauthorizedHandlers.forEach((fn) => {
+      try {
+        fn();
+      } catch {
+        /* noop */
+      }
+    });
+  }
+
   private setupInterceptors() {
-    // Request interceptor
+    // Request interceptor: add Bearer token if present
     this.client.interceptors.request.use(
       (config) => {
         if (this.token) {
-          config.headers.Authorization = `Bearer ${this.token}`;
+          config.headers = config.headers ?? {};
+          (config.headers as any).Authorization = `Bearer ${this.token}`;
         }
         return config;
       },
       (error) => Promise.reject(error)
     );
 
-    // Response interceptor
+    // Response interceptor: normalize errors, emit 401
     this.client.interceptors.response.use(
       (response: AxiosResponse) => response,
       (error: AxiosError) => {
         if (error.response?.status === 401) {
+          // clear token locally and notify store
           this.clearToken();
-          // Redirect to login or refresh token logic here
+          this.notifyUnauthorized();
         }
         return Promise.reject(this.formatError(error));
       }
@@ -54,7 +81,6 @@ class ApiClient {
         status: error.response.status,
       };
     }
-    
     return {
       message: error.message || 'Network error',
       status: error.response?.status || 0,
@@ -81,28 +107,53 @@ class ApiClient {
     }
   }
 
-  async get<T = any>(url: string, params?: any): Promise<ApiResponse<T>> {
-    const response = await this.client.get<ApiResponse<T>>(url, { params });
+  // ---- HTTP helpers (return ApiResponse<T> to match your services) ----
+
+  async get<T = any>(
+    url: string,
+    params?: any,
+    config?: AxiosRequestConfig
+  ): Promise<ApiResponse<T>> {
+    const response = await this.client.get<ApiResponse<T>>(url, {
+      params,
+      ...(config || {}),
+    });
     return response.data;
   }
 
-  async post<T = any>(url: string, data?: any): Promise<ApiResponse<T>> {
-    const response = await this.client.post<ApiResponse<T>>(url, data);
+  async post<T = any>(
+    url: string,
+    data?: any,
+    config?: AxiosRequestConfig
+  ): Promise<ApiResponse<T>> {
+    const response = await this.client.post<ApiResponse<T>>(url, data, config);
     return response.data;
   }
 
-  async put<T = any>(url: string, data?: any): Promise<ApiResponse<T>> {
-    const response = await this.client.put<ApiResponse<T>>(url, data);
+  async put<T = any>(
+    url: string,
+    data?: any,
+    config?: AxiosRequestConfig
+  ): Promise<ApiResponse<T>> {
+    const response = await this.client.put<ApiResponse<T>>(url, data, config);
     return response.data;
   }
 
-  async patch<T = any>(url: string, data?: any): Promise<ApiResponse<T>> {
-    const response = await this.client.patch<ApiResponse<T>>(url, data);
+  async patch<T = any>(
+    url: string,
+    data?: any,
+    config?: AxiosRequestConfig
+  ): Promise<ApiResponse<T>> {
+    const response = await this.client.patch<ApiResponse<T>>(url, data, config);
     return response.data;
   }
 
-  async delete<T = any>(url: string): Promise<ApiResponse<T>> {
-    const response = await this.client.delete<ApiResponse<T>>(url);
+  // Support DELETE with body via config.data
+  async delete<T = any>(
+    url: string,
+    config?: AxiosRequestConfig
+  ): Promise<ApiResponse<T>> {
+    const response = await this.client.delete<ApiResponse<T>>(url, config);
     return response.data;
   }
 }

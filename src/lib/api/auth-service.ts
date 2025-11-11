@@ -1,74 +1,45 @@
 // lib/api/auth-service.ts
 import { apiClient } from './client';
-import { 
-  AuthResponse, 
-  LoginCredentials, 
-  RegisterData, 
-  User 
-} from '@/types/auth';
+import { unwrap } from './_unwrap';
+import type { AuthResponse, LoginCredentials, RegisterData, User } from '@/types/auth';
 
 export const authService = {
   async login(credentials: LoginCredentials): Promise<AuthResponse> {
-    const response = await apiClient.post<AuthResponse>('/auth/login', credentials);
-    if (response.data?.token) {
-      apiClient.setToken(response.data.token);
-    }
-    return response.data!;
+    const raw = await apiClient.post<AuthResponse>('/login', credentials);
+    const res = unwrap<AuthResponse>(raw);
+    if (res?.token) apiClient.setToken(res.token);
+    return res;
   },
 
   async register(userData: RegisterData): Promise<AuthResponse> {
-    const response = await apiClient.post<AuthResponse>('/auth/register', userData);
-    if (response.data?.token) {
-      apiClient.setToken(response.data.token);
-    }
-    return response.data!;
+    const payload = {
+      first_name: userData.first_name?.trim(),
+      last_name: userData.last_name?.trim(),
+      email: userData.email?.trim().toLowerCase(),
+      phone_number: userData.phone_number?.trim(),                 // required by backend
+      password: userData.password,
+      password_confirmation: userData.password_confirmation ?? userData.password,
+      role: userData.role ?? 'passenger',
+    };
+    const raw = await apiClient.post<AuthResponse>('/register', payload);
+    const res = unwrap<AuthResponse>(raw);
+    if (res?.token) apiClient.setToken(res.token);
+    return res;
   },
 
   async logout(): Promise<void> {
-    try {
-      await apiClient.post('/auth/logout');
-    } catch (error) {
-      console.error('Logout error:', error);
-    } finally {
-      apiClient.clearToken();
-    }
+    try { await apiClient.post('/logout'); }
+    finally { apiClient.clearToken(); }
   },
 
   async getCurrentUser(): Promise<User> {
-    const response = await apiClient.get<User>('/auth/user');
-    return response.data!;
-  },
-
-  async refreshToken(): Promise<AuthResponse> {
-    const response = await apiClient.post<AuthResponse>('/auth/refresh');
-    if (response.data?.token) {
-      apiClient.setToken(response.data.token);
-    }
-    return response.data!;
+    const raw = await apiClient.get<User>('/user');
+    return unwrap<User>(raw);
   },
 
   async updateProfile(userData: Partial<User>): Promise<User> {
-    const response = await apiClient.put<User>('/auth/profile', userData);
-    return response.data!;
-  },
-
-  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
-    await apiClient.post('/auth/change-password', {
-      current_password: currentPassword,
-      new_password: newPassword,
-    });
-  },
-
-  async requestPasswordReset(email: string): Promise<void> {
-    await apiClient.post('/auth/forgot-password', { email });
-  },
-
-  async resetPassword(token: string, email: string, password: string): Promise<void> {
-    await apiClient.post('/auth/reset-password', {
-      token,
-      email,
-      password,
-      password_confirmation: password,
-    });
+    const raw = await apiClient.put<{ user: User; message?: string }>('/user/profile', userData);
+    const res = unwrap<{ user: User; message?: string }>(raw);
+    return res.user;
   },
 };

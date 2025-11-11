@@ -129,3 +129,5 @@ export interface EmergencyAlert {
   user?: User;
   ride?: Ride;
 }
+
+export type { User, Driver, Ride };

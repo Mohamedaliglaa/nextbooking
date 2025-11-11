@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { User, AuthResponse } from '@/types/auth';
 import { authService } from '@/lib/api/auth-service';
+import { apiClient } from '@/lib/api/client';
 
 interface AuthState {
   user: User | null;
@@ -13,7 +14,7 @@ interface AuthState {
   register: (userData: any) => Promise<void>;
   logout: () => Promise<void>;
   fetchUser: () => Promise<void>;
-  updateUser: (userData: Partial<User>) => Promise<void>;
+  updateUser: (userData: Partial<User> & { profile_image?: File | null }) => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -27,10 +28,12 @@ export const useAuthStore = create<AuthState>()(
       login: async (credentials) => {
         set({ isLoading: true });
         try {
-          const authResponse: AuthResponse = await authService.login(credentials);
+          // apiClient returns ApiResponse<AuthResponse>, so pick .data
+          const res = await authService.login(credentials);
+          // service already set axios token, but keep Zustand in sync:
           set({
-            user: authResponse.user,
-            token: authResponse.token,
+            user: (res as AuthResponse).user,
+            token: (res as AuthResponse).token,
             isAuthenticated: true,
             isLoading: false,
           });
@@ -43,10 +46,10 @@ export const useAuthStore = create<AuthState>()(
       register: async (userData) => {
         set({ isLoading: true });
         try {
-          const authResponse: AuthResponse = await authService.register(userData);
+          const res = await authService.register(userData);
           set({
-            user: authResponse.user,
-            token: authResponse.token,
+            user: (res as AuthResponse).user,
+            token: (res as AuthResponse).token,
             isAuthenticated: true,
             isLoading: false,
           });
@@ -71,12 +74,16 @@ export const useAuthStore = create<AuthState>()(
       },
 
       fetchUser: async () => {
-        if (!get().token) return;
-        
+        const token = get().token;
+        if (!token) return;
+
+        // ensure axios has token after refresh
+        apiClient.setToken(token);
+
         set({ isLoading: true });
         try {
           const user = await authService.getCurrentUser();
-          set({ user, isLoading: false });
+          set({ user, isLoading: false, isAuthenticated: true });
         } catch (error) {
           set({ isLoading: false });
           throw error;
@@ -84,17 +91,39 @@ export const useAuthStore = create<AuthState>()(
       },
 
       updateUser: async (userData) => {
-        const user = await authService.updateProfile(userData);
-        set({ user });
+        const res = await authService.updateProfile(userData);
+        // Laravel returns { user, message } for updateProfile
+        const updated = (res as any)?.user ? (res as any).user : (res as any);
+        set({ user: updated });
       },
     }),
     {
       name: 'auth-storage',
-      partialize: (state) => ({ 
+      partialize: (state) => ({
         token: state.token,
         user: state.user,
         isAuthenticated: state.isAuthenticated,
       }),
+      // After rehydrate, wire token back to axios (and optionally set isAuthenticated)
+      onRehydrateStorage: () => (state) => {
+        try {
+          const token = state?.token;
+          if (token) {
+            apiClient.setToken(token);
+            // keep store consistent (useful if you ever change partialize fields)
+            useAuthStore.setState({ isAuthenticated: true });
+          }
+        } catch {}
+      },
     }
   )
 );
+
+// —— Keep Zustand in sync with axios on 401 Unauthorized ——
+apiClient.onUnauthorized(() => {
+  useAuthStore.setState({
+    user: null,
+    token: null,
+    isAuthenticated: false,
+  });
+});

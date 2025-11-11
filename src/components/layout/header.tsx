@@ -5,6 +5,8 @@ import { Menu, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Container } from '@/components/shared/container'
 import Link from 'next/link'
+import { useAuth } from '@/hooks/use-auth'
+import { routeForRole, routeForUser } from '@/lib/role-routing'
 
 export default function Header() {
   const [menuMobileOuvert, setMenuMobileOuvert] = useState(false)
@@ -12,21 +14,22 @@ export default function Header() {
   const observerRef = useRef<IntersectionObserver | null>(null)
   const mutationObserverRef = useRef<MutationObserver | null>(null)
 
-  // Gestion du scroll
+  const { isAuthenticated, user, isLoading, logout } = useAuth()
+
+  // Scroll shadow
   useEffect(() => {
     const handleScroll = () => setEstDefile(window.scrollY > 20)
     window.addEventListener('scroll', handleScroll)
     return () => window.removeEventListener('scroll', handleScroll)
   }, [])
 
-  // Animation à l'apparition
+  // Appear animations (unchanged)
   useEffect(() => {
     let observer: IntersectionObserver | null = null
 
     function initAnimation() {
       if (observer) observer.disconnect()
       const elements = document.querySelectorAll('.a-animer')
-
       if (elements.length === 0) return
 
       observer = new IntersectionObserver(
@@ -92,6 +95,16 @@ export default function Header() {
     { nom: 'Contact', href: '#contact' },
   ]
 
+  const dashboardHref = routeForUser(user)
+
+  const handleLogout = async () => {
+    try {
+      await logout()
+    } finally {
+      setMenuMobileOuvert(false)
+    }
+  }
+
   return (
     <header
       className={`fixed w-full z-50 transition-all duration-500 border-b backdrop-blur-md bg-background/80 ${
@@ -101,10 +114,9 @@ export default function Header() {
       <Container className="max-w-full">
         <div className="flex items-center justify-between h-20">
           {/* Logo */}
-          <div className="flex items-center space-x-3 pl-4 cursor-pointer">
-            
+          <Link href="/" className="flex items-center space-x-3 pl-4 cursor-pointer">
             <span className="font-brand text-2xl text-foreground">TaxiPro</span>
-          </div>
+          </Link>
 
           {/* Navigation desktop */}
           <nav className="hidden md:flex items-center w-full ml-10">
@@ -118,21 +130,46 @@ export default function Header() {
                 <span className="absolute left-0 bottom-0 w-0 h-1 bg-primary group-hover:w-full transition-all"></span>
               </Link>
             ))}
-            <Button size="lg" className="ml-auto bg-primary text-primary-foreground hover:bg-primary/90">
-              Réserver maintenant
-            </Button>
+
+            {/* Right side buttons */}
+            <div className="ml-auto flex items-center gap-3">
+              {/* Show login/signup when not authenticated (or while loading show nothing) */}
+              {!isLoading && !isAuthenticated && (
+                <>
+                  <Button variant="outline" asChild>
+                    <Link href="/auth/login">Se connecter</Link>
+                  </Button>
+                  <Button className="bg-primary text-primary-foreground hover:bg-primary/90" asChild>
+                    <Link href="/auth/signup">Créer un compte</Link>
+                  </Button>
+                </>
+              )}
+
+              {/* When authenticated, show Dashboard + Logout */}
+              {!isLoading && isAuthenticated && (
+                <>
+                  <Button variant="outline" asChild>
+                    <Link href={dashboardHref}>Tableau de bord</Link>
+                  </Button>
+                  <Button onClick={handleLogout} className="bg-primary text-primary-foreground hover:bg-primary/90">
+                    Déconnexion
+                  </Button>
+                </>
+              )}
+            </div>
           </nav>
 
-          {/* Menu mobile */}
+          {/* Mobile toggle */}
           <button
             onClick={() => setMenuMobileOuvert(!menuMobileOuvert)}
             className="md:hidden text-foreground hover:text-primary transition-colors"
+            aria-label="Ouvrir le menu"
           >
             {menuMobileOuvert ? <X size={24} /> : <Menu size={24} />}
           </button>
         </div>
 
-        {/* Menu mobile ouvert */}
+        {/* Mobile menu */}
         {menuMobileOuvert && (
           <div className="md:hidden bg-background/95 backdrop-blur-md border-t border-border/50">
             <div className="py-6 flex flex-col space-y-3">
@@ -146,9 +183,49 @@ export default function Header() {
                   {item.nom}
                 </a>
               ))}
-              <Button size="lg" className="mt-4 w-full bg-primary text-primary-foreground hover:bg-primary/90">
-                Réserver maintenant
-              </Button>
+
+              <div className="px-4 pt-2 flex flex-col gap-2">
+                {/* Guest actions */}
+                {!isLoading && !isAuthenticated && (
+                  <>
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      asChild
+                      onClick={() => setMenuMobileOuvert(false)}
+                    >
+                      <Link href="/auth/login">Se connecter</Link>
+                    </Button>
+                    <Button
+                      className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
+                      asChild
+                      onClick={() => setMenuMobileOuvert(false)}
+                    >
+                      <Link href="/auth/signup">Créer un compte</Link>
+                    </Button>
+                  </>
+                )}
+
+                {/* Authenticated actions */}
+                {!isLoading && isAuthenticated && (
+                  <>
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      asChild
+                      onClick={() => setMenuMobileOuvert(false)}
+                    >
+                      <Link href={dashboardHref}>Tableau de bord</Link>
+                    </Button>
+                    <Button
+                      className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
+                      onClick={handleLogout}
+                    >
+                      Déconnexion
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         )}

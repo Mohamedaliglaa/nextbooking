@@ -4,12 +4,7 @@ import {
   Driver, 
   Vehicle, 
   Ride, 
-  RideRequest, 
-  RideEstimation,
-  Payment, 
-  PaymentRequest,
-  Promotion,
-  PromoCodeValidation,
+  
   Location,
   Notification,
   Rating,
@@ -18,7 +13,15 @@ import {
   ApiError,
   PaginatedResponse
 } from '@/types/api';
+import {
+  RideRequest, 
+  RideEstimation,
+}from '@/types/booking';
 
+import {
+  Payment, 
+  
+}from '@/types/payment';
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
 
 class ApiService {
@@ -170,12 +173,7 @@ async requestRide(rideData: RideRequest): Promise<{ ride: Ride; message: string 
   }
 
   // 💳 Payments
-  async processPayment(paymentData: PaymentRequest): Promise<Payment> {
-    return this.request(`/payments/ride/${paymentData.ride_id}`, {
-      method: 'POST',
-      body: JSON.stringify(paymentData),
-    });
-  }
+  
 
   async getPaymentHistory(): Promise<PaginatedResponse<Payment>> {
     return this.request('/payments/history');
@@ -185,28 +183,7 @@ async requestRide(rideData: RideRequest): Promise<{ ride: Ride; message: string 
     return this.request(`/payments/${paymentId}`);
   }
 
-  // 🎁 Promotions
-  async validatePromoCode(code: string): Promise<PromoCodeValidation> {
-    return this.request('/promotions/validate', {
-      method: 'POST',
-      body: JSON.stringify({ promo_code: code }),
-    });
-  }
 
-  async applyPromoCode(rideId: string, code: string): Promise<{
-    discount_amount: number;
-    final_price: number;
-    promotion: Promotion;
-  }> {
-    return this.request('/promotions/apply', {
-      method: 'POST',
-      body: JSON.stringify({ ride_id: rideId, promo_code: code }),
-    });
-  }
-
-  async getActivePromotions(): Promise<Promotion[]> {
-    return this.request('/promotions');
-  }
 
   // 🗺️ Locations
   async updateLocation(locationData: {

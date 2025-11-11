@@ -11,7 +11,9 @@ import WorldMap from '@/components/landing/WorldMap'
 export default function Home() {
   return (
     <div>
-      <Hero />
+      <Header />
+      <div className="pt-20">
+        <Hero />
       <main className="min-h-screen flex items-center justify-center p-8">
       {/* Tailwind example styling; change as you like */}
       <WorldMap className="w-full max-w-5xl h-auto text-neutral-700" />
@@ -22,6 +24,7 @@ export default function Home() {
       <TestimonialsSection />
       <FAQSection />
       <ContactSection />
+      </div>
     </div>
   )
 }

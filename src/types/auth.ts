@@ -1,12 +1,11 @@
-import { Vehicle } from ".";
+import { Vehicle, Location } from './api';
 
-// types/auth.ts
 export interface User {
   id: number;
   first_name: string;
   last_name: string;
   email: string;
-  phone_number?: string;
+  phone_number: string;
   profile_image?: string;
   role: 'passenger' | 'driver' | 'admin';
   rating?: number;
@@ -14,7 +13,7 @@ export interface User {
   email_verified_at?: string;
   created_at: string;
   updated_at: string;
-  
+
   // Relations
   driver?: Driver;
 }
@@ -32,7 +31,7 @@ export interface Driver {
   total_earnings: number;
   created_at: string;
   updated_at: string;
-  
+
   // Relations
   user?: User;
   vehicle?: Vehicle;
@@ -54,8 +53,19 @@ export interface RegisterData {
   last_name: string;
   email: string;
   password: string;
+  password_confirmation?: string;
   phone_number?: string;
   role?: 'passenger' | 'driver';
+
+  // Driver-specific optional fields
+  license_number?: string;
+  license_image?: File;
+  id_card_image?: File;
+  insurance_image?: File;
+  vehicle_type?: string;
+  vehicle_brand?: string;
+  vehicle_model?: string;
+  license_plate?: string;
 }
 
 export interface GuestUser {

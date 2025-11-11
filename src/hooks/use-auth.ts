@@ -1,6 +1,5 @@
 // hooks/use-auth.ts
 import { useAuthStore } from '@/lib/store/auth-store';
-import { authService } from '@/lib/api/auth-service';
 import { useUIStore } from '@/lib/store/ui-store';
 
 export const useAuth = () => {
@@ -28,13 +27,13 @@ export const useAuth = () => {
         description: 'Bienvenue !',
       });
     } catch (error: any) {
-      addToast({
-        type: 'error',
-        title: 'Erreur de connexion',
-        description: error.message || 'Email ou mot de passe incorrect',
-      });
+      const msg = error?.errors
+        ? Object.values(error.errors).flat()[0]
+        : error?.message || 'Email ou mot de passe incorrect';
+      addToast({ type: 'error', title: 'Erreur de connexion', description: msg });
       throw error;
-    } finally {
+    }
+ finally {
       setLoading('global', false);
     }
   };
