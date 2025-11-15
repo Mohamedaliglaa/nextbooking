@@ -88,7 +88,6 @@ export default function DriverAvailableRidesPage() {
                         </span>
                         <span>{(ride.distance ?? 0).toFixed(2)} km</span>
                         <span className="font-semibold text-gray-900">{(ride.fare ?? 0).toFixed(2)} €</span>
-                        {ride.vehicle_type && <span>Type: {ride.vehicle_type}</span>}
                       </div>
                     </div>
 
