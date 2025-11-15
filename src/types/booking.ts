@@ -1,8 +1,11 @@
+// types/booking.ts
 import { Vehicle, PromoCode } from "./api";
 import { User } from "./auth";
 import { Payment } from "./payment";
 
-// types/booking.ts
+/** allow strings or structured stops in estimation */
+export type StopInput = string | { location?: string; address?: string; lat?: number | null; lng?: number | null; latitude?: number | null; longitude?: number | null };
+
 export interface VehicleOption {
   id: string;
   name: string;
@@ -14,48 +17,47 @@ export interface VehicleOption {
 
 export interface RideStop {
   location: string;
-  lat?: number;
-  lng?: number;
+  lat?: number | null;
+  lng?: number | null;
   order: number;
 }
 
 export interface Ride {
   id: number;
-  passenger_id?: number;
-  driver_id?: number;
-  vehicle_id?: number;
+  passenger_id?: number | null;
+  driver_id?: number | null;
+  vehicle_id?: number | null;
   pickup_location: string;
   dropoff_location: string;
   pickup_lat: number;
   pickup_lng: number;
   dropoff_lat: number;
   dropoff_lng: number;
-  stops?: RideStop[];
+  stops?: RideStop[] | null;
   fare: number;
   distance: number;
   duration: number;
-  status: 'pending' | 'accepted' | 'in_progress' | 'completed' | 'cancelled';
+  status: 'requested' | 'accepted' | 'in_progress' | 'completed' | 'cancelled';
   payment_status: 'pending' | 'paid' | 'failed' | 'refunded';
-  payment_method?: 'cash' | 'card' | 'stripe';
-  cancellation_reason?: string;
-  cancellation_fee?: number;
+  payment_method?: 'cash' | 'stripe';
+  cancellation_reason?: string | null;
+  cancellation_fee?: number | null;
   is_scheduled: boolean;
-  scheduled_at?: string;
-  requested_at?: string;
-  accepted_at?: string;
-  started_at?: string;
-  completed_at?: string;
-  guest_name?: string;
-  guest_email?: string;
-  guest_phone?: string;
+  scheduled_at?: string | null;
+  requested_at?: string | null;
+  accepted_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  guest_name?: string | null;
+  guest_email?: string | null;
+  guest_phone?: string | null;
   created_at: string;
   updated_at: string;
-  
-  // Relations
-  passenger?: User;
-  driver?: User;
-  vehicle?: Vehicle;
-  payments?: Payment[];
+
+  passenger?: User | null;
+  driver?: User | null;
+  vehicle?: Vehicle | null;
+  payments?: Payment[] | null;
 }
 
 export interface RideRequest {
@@ -65,11 +67,11 @@ export interface RideRequest {
   pickup_lng: number;
   dropoff_lat: number;
   dropoff_lng: number;
-  vehicle_type: string;
+  vehicle_type: 'standard' | 'premium' | 'van' | 'berline' | 'break';
   passenger_count: number;
   is_scheduled: boolean;
   scheduled_at?: string;
-  stops: RideStop[];
+  stops: Array<{ location: string; lat?: number | null; lng?: number | null }>;
   estimated_distance: number;
   estimated_duration: number;
   estimated_fare: number;
@@ -94,7 +96,7 @@ export interface RideEstimation {
   passenger_count: number;
   is_scheduled: boolean;
   scheduled_at?: string;
-  stops: string[];
+  stops: StopInput[]; // <—
   estimated_distance: number;
   estimated_duration: number;
   estimated_fare: number;

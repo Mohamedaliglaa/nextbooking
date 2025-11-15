@@ -28,11 +28,7 @@ export function AdminTopbar() {
         {/* Left: Mobile menu */}
         <div className="lg:hidden">
           <Sheet open={open} onOpenChange={setOpen}>
-            <SheetTrigger asChild>
-              <Button size="icon" variant="outline" className="shrink-0">
-                <Menu className="h-4 w-4" />
-              </Button>
-            </SheetTrigger>
+            
             <SheetContent side="left" className="p-0 w-[260px]">
               <SheetHeader className="sr-only">
                 <SheetTitle>Navigation</SheetTitle>

@@ -1,4 +1,5 @@
 // lib/api/admin-service.ts
+import { Ride } from '@/types';
 import { apiClient } from './client';
 
 /* ---------- Backend-shaped types ---------- */
@@ -154,9 +155,9 @@ export const adminService = {
     return (res.data as AdminRide[]) ?? [];
   },
 
-  async getRide(id: number): Promise<AdminRide> {
-    const res = await apiClient.get<AdminRide>(`/admin/rides/${id}`);
-    return (res.data as AdminRide) ?? (res as unknown as AdminRide);
+  async getRide(id: number): Promise<Ride> {
+    const res = await apiClient.get<Ride>(`/admin/rides/${id}`);
+    return (res.data as Ride) ?? (res as unknown as Ride);
   },
 
   async getRideStatistics(): Promise<any> {

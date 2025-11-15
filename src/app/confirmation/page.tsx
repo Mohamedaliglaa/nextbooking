@@ -1,23 +1,14 @@
 // app/confirmation/page.tsx
 "use client";
-
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useBooking } from "@/hooks/use-booking";
 import { useAuth } from "@/hooks/use-auth";
-import {
-  ArrowLeft,
-  User,
-  Clock,
-  DollarSign,
-  Navigation,
-  CreditCard,
-  Wallet,
-  Shield,
-} from "lucide-react";
+import { ArrowLeft, User, Clock, DollarSign, Navigation, CreditCard, Wallet, Shield } from "lucide-react";
 import Image from "next/image";
 import { stripeService } from "@/lib/api/stripe-service";
 import StripeCheckoutProvider from "@/components/stripe/StripeCheckoutProvider";
+import type { StopInput } from "@/types/booking";
 
 type PaymentMethod = "cash" | "credit_card";
 
@@ -33,10 +24,7 @@ export default function ConfirmationPage() {
     rideDetails,
     passengerInfo: contextPassengerInfo,
     paymentMethod: contextPaymentMethod,
-    setPassengerInfo,
-    setPaymentMethod,
-    requestRideWithPayment, // used when clicking
-    isProcessing,
+    requestRideWithPayment,
     setCurrentRide,
   } = useBooking();
 
@@ -45,28 +33,20 @@ export default function ConfirmationPage() {
   const [loadingCash, setLoadingCash] = useState(false);
   const [loadingCard, setLoadingCard] = useState(false);
   const [passengerInfo, setLocalPassengerInfo] = useState<PassengerInfo>({
-    passenger_name:
-      user?.first_name && user?.last_name
-        ? `${user.first_name} ${user.last_name}`
-        : "",
+    passenger_name: user?.first_name && user?.last_name ? `${user.first_name} ${user.last_name}` : "",
     passenger_email: user?.email || "",
     passenger_phone: user?.phone_number || "",
   });
-  const [paymentMethod, setLocalPaymentMethod] = useState<PaymentMethod>(
-    contextPaymentMethod || "credit_card"
-  );
+  const [paymentMethod, setLocalPaymentMethod] = useState<PaymentMethod>(contextPaymentMethod || "credit_card");
 
-  // Stripe Embedded Checkout state
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
-  // hydrate from context if present
   useEffect(() => {
     if (contextPassengerInfo) setLocalPassengerInfo(contextPassengerInfo);
     if (contextPaymentMethod) setLocalPaymentMethod(contextPaymentMethod);
   }, [contextPassengerInfo, contextPaymentMethod]);
 
-  // back to home if no details
   useEffect(() => {
     if (!rideDetails) router.push("/");
   }, [rideDetails, router]);
@@ -78,91 +58,115 @@ export default function ConfirmationPage() {
 
   const guestMissingBasics =
     !isAuthenticated &&
-    (!passengerInfo.passenger_name?.trim() ||
-      !passengerInfo.passenger_phone?.trim());
+    (!passengerInfo.passenger_name?.trim() || !passengerInfo.passenger_phone?.trim());
 
-  // Create ride payload (reused by both flows)
+  function humanizeErrors(e: any): string {
+    const errs = e?.errors;
+    if (!errs) return e?.message || "Erreur inconnue";
+    try {
+      return Object.entries(errs)
+        .map(([k, v]: any) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
+        .join("\n");
+    } catch {
+      return e?.message || "Erreur de validation";
+    }
+  }
+
+  function preflightValidate(): string | null {
+    if (!rideDetails) return "Données de trajet manquantes.";
+    const vt = String(rideDetails.vehicle_type || "");
+    const allowed = ["standard", "premium", "van", "berline", "break"];
+    if (!allowed.includes(vt)) return `vehicle_type invalide: ${vt}`;
+    if (!rideDetails.pickup_location || !rideDetails.dropoff_location)
+      return "Adresses départ/arrivée manquantes.";
+    if (rideDetails.is_scheduled && !rideDetails.scheduled_at)
+      return "scheduled_at est requis quand is_scheduled=true.";
+    if (!isAuthenticated && (!passengerInfo.passenger_name?.trim() || !passengerInfo.passenger_phone?.trim())) {
+      return "Nom et téléphone requis pour un invité.";
+    }
+    return null;
+  }
+
+  // ✅ normalize stops for backend
+  function normalizeStops(input?: StopInput[]) {
+    if (!Array.isArray(input)) return [];
+    return input
+      .filter(Boolean)
+      .map((s: any) => {
+        if (typeof s === "string") return { location: s, lat: null, lng: null };
+        const location = s?.location ?? s?.address ?? String(s ?? "");
+        const lat = s?.lat ?? s?.latitude ?? null;
+        const lng = s?.lng ?? s?.longitude ?? null;
+        return { location: String(location), lat, lng };
+      });
+  }
+
   const buildRidePayload = (method: "cash" | "stripe") => {
     if (!rideDetails) return null;
-    const base = {
+
+    const allowedVehicleType =
+      (rideDetails.vehicle_type as "standard" | "premium" | "van" | "berline" | "break" | undefined) || undefined;
+
+    const isScheduled = !!rideDetails.is_scheduled;
+
+    const stops = normalizeStops(rideDetails.stops);
+
+    const base: any = {
       pickup_location: rideDetails.pickup_location,
       dropoff_location: rideDetails.dropoff_location,
-      pickup_lat: rideDetails.pickup_lat,
-      pickup_lng: rideDetails.pickup_lng,
-      dropoff_lat: rideDetails.dropoff_lat,
-      dropoff_lng: rideDetails.dropoff_lng,
-      vehicle_type: rideDetails.vehicle_type,
-      passenger_count: 1,
-      is_scheduled: rideDetails.is_scheduled || false,
-      scheduled_at: rideDetails.scheduled_at,
-      stops: rideDetails.stops || [],
-      estimated_distance: rideDetails.estimated_distance,
-      estimated_duration: rideDetails.estimated_duration,
-      estimated_fare: finalPrice,
+      pickup_lat: Number(rideDetails.pickup_lat),
+      pickup_lng: Number(rideDetails.pickup_lng),
+      dropoff_lat: Number(rideDetails.dropoff_lat),
+      dropoff_lng: Number(rideDetails.dropoff_lng),
+      vehicle_type: allowedVehicleType,
+      is_scheduled: isScheduled,
+      ...(isScheduled && rideDetails.scheduled_at ? { scheduled_at: rideDetails.scheduled_at } : {}),
+      stops,
+      estimated_distance: Number(rideDetails.estimated_distance),
+      estimated_duration: Math.round(Number(rideDetails.estimated_duration)),
+      estimated_fare: Number(finalPrice),
       payment_method: method,
     };
+
     if (isAuthenticated) return base;
-    return {
-      ...base,
-      guest_name: passengerInfo.passenger_name || null,
-      guest_phone: passengerInfo.passenger_phone || null,
-      guest_email: passengerInfo.passenger_email || null,
-    };
+
+    const guest: any = {};
+    if (passengerInfo.passenger_name?.trim()) guest.guest_name = passengerInfo.passenger_name.trim();
+    if (passengerInfo.passenger_phone?.trim()) guest.guest_phone = passengerInfo.passenger_phone.trim();
+    if (passengerInfo.passenger_email?.trim()) guest.guest_email = passengerInfo.passenger_email.trim();
+
+    return Object.keys(guest).length ? { ...base, ...guest } : base;
   };
 
-  /**
-   * CARD: only when clicking.
-   * 1) Create ride (payment_method 'stripe')
-   * 2) POST /payments/ride/{rideId}/checkout-session -> get clientSecret
-   * 3) Render <StripeCheckoutProvider clientSecret=... />
-   */
   const handleCardClick = async () => {
     if (!rideDetails) return;
-    if (guestMissingBasics) {
-      setPaymentError(
-        "Veuillez renseigner au minimum le nom et le téléphone pour continuer."
-      );
-      return;
-    }
+    const localErr = preflightValidate();
+    if (localErr) return setPaymentError(localErr);
+
     setPaymentError(null);
     setLoadingCard(true);
     try {
-      // 1) Create the ride now (this is the first write to backend)
       const ridePayload = buildRidePayload("stripe");
       const ride = await requestRideWithPayment(ridePayload as any, "stripe");
       setCurrentRide(ride);
 
-      // 2) Create checkout session for that ride
       const session = await stripeService.createCheckoutSession(ride.id);
-      if (!session?.clientSecret) {
-        throw new Error(
-          "Client secret introuvable. Vérifiez la configuration Embedded Checkout."
-        );
-      }
+      if (!session?.clientSecret) throw new Error("Client secret introuvable. Vérifiez la configuration Embedded Checkout.");
 
-      // 3) Mount embedded checkout
       setClientSecret(session.clientSecret);
     } catch (e: any) {
       console.error("Stripe init error:", e);
-      setPaymentError(e?.message || "Erreur lors de l'initialisation du paiement");
+      setPaymentError(humanizeErrors(e));
     } finally {
       setLoadingCard(false);
     }
   };
 
-  /**
-   * CASH: only when clicking.
-   * 1) Create ride (payment_method 'cash')
-   * 2) Redirect success
-   */
   const handleCashClick = async () => {
     if (!rideDetails) return;
-    if (guestMissingBasics) {
-      setPaymentError(
-        "Veuillez renseigner au minimum le nom et le téléphone pour continuer."
-      );
-      return;
-    }
+    const localErr = preflightValidate();
+    if (localErr) return setPaymentError(localErr);
+
     setPaymentError(null);
     setLoadingCash(true);
     try {
@@ -172,7 +176,7 @@ export default function ConfirmationPage() {
       router.push("/booking-success");
     } catch (e: any) {
       console.error("Cash booking error:", e);
-      setPaymentError(e?.message || "Erreur lors de la réservation");
+      setPaymentError(humanizeErrors(e));
     } finally {
       setLoadingCash(false);
     }
@@ -181,7 +185,6 @@ export default function ConfirmationPage() {
   const handlePaymentMethodChange = (m: PaymentMethod) => {
     setLocalPaymentMethod(m);
     setPaymentError(null);
-    // if switching away from card, unmount embedded checkout
     if (m !== "credit_card") setClientSecret(null);
   };
 
@@ -203,6 +206,9 @@ export default function ConfirmationPage() {
       </div>
     );
   }
+
+  // ... UI exactly as in your last file (omitted for brevity) ...
+
 
   return (
     <div className="pt-24 min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-8 px-4 sm:px-6 lg:px-8">
@@ -479,7 +485,9 @@ export default function ConfirmationPage() {
                   {paymentError && (
                     <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                       <p className="text-red-800 font-medium">Erreur de paiement</p>
-                      <p className="text-red-600 text-sm mt-1">{paymentError}</p>
+                      <p className="text-red-600 text-sm mt-1 whitespace-pre-line">
+                        {paymentError}
+                      </p>
                     </div>
                   )}
                 </div>
@@ -519,6 +527,15 @@ export default function ConfirmationPage() {
                       </>
                     )}
                   </button>
+
+                  {paymentError && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                      <p className="text-red-800 font-medium">Erreur</p>
+                      <p className="text-red-600 text-sm mt-1 whitespace-pre-line">
+                        {paymentError}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

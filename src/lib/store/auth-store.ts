@@ -5,16 +5,28 @@ import { User, AuthResponse } from '@/types/auth';
 import { authService } from '@/lib/api/auth-service';
 import { apiClient } from '@/lib/api/client';
 
+type Credentials = { email: string; password: string };
+
 interface AuthState {
   user: User | null;
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (credentials: { email: string; password: string }) => Promise<void>;
+
+  // small helpers (useful for profile edits, admin impersonation, etc.)
+  setUser: (u: User | null) => void;
+  setToken: (t: string | null) => void;
+
+  login: (credentials: Credentials) => Promise<void>;
   register: (userData: any) => Promise<void>;
   logout: () => Promise<void>;
   fetchUser: () => Promise<void>;
   updateUser: (userData: Partial<User> & { profile_image?: File | null }) => Promise<void>;
+}
+
+function unwrapAuth(res: any): AuthResponse {
+  // accept either { message, data: { user, token } } or { user, token }
+  return (res?.data ?? res) as AuthResponse;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -25,18 +37,19 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       isLoading: false,
 
+      setUser: (u) => set({ user: u, isAuthenticated: !!u }),
+      setToken: (t) => {
+        apiClient.setToken(t || String(undefined));
+        set({ token: t, isAuthenticated: !!t });
+      },
+
       login: async (credentials) => {
         set({ isLoading: true });
         try {
-          // apiClient returns ApiResponse<AuthResponse>, so pick .data
-          const res = await authService.login(credentials);
-          // service already set axios token, but keep Zustand in sync:
-          set({
-            user: (res as AuthResponse).user,
-            token: (res as AuthResponse).token,
-            isAuthenticated: true,
-            isLoading: false,
-          });
+          const raw = await authService.login(credentials);
+          const { user, token } = unwrapAuth(raw);
+          apiClient.setToken(token);
+          set({ user, token, isAuthenticated: true, isLoading: false });
         } catch (error) {
           set({ isLoading: false });
           throw error;
@@ -46,13 +59,10 @@ export const useAuthStore = create<AuthState>()(
       register: async (userData) => {
         set({ isLoading: true });
         try {
-          const res = await authService.register(userData);
-          set({
-            user: (res as AuthResponse).user,
-            token: (res as AuthResponse).token,
-            isAuthenticated: true,
-            isLoading: false,
-          });
+          const raw = await authService.register(userData);
+          const { user, token } = unwrapAuth(raw);
+          apiClient.setToken(token);
+          set({ user, token, isAuthenticated: true, isLoading: false });
         } catch (error) {
           set({ isLoading: false });
           throw error;
@@ -62,38 +72,35 @@ export const useAuthStore = create<AuthState>()(
       logout: async () => {
         try {
           await authService.logout();
-        } catch (error) {
-          console.error('Logout error:', error);
+        } catch {
+          // ignore network failures here
         } finally {
-          set({
-            user: null,
-            token: null,
-            isAuthenticated: false,
-          });
+          apiClient.setToken(String(undefined));
+          set({ user: null, token: null, isAuthenticated: false });
+          // optional: hard redirect so all client state resets
+          // window.location.href = '/login';
         }
       },
 
       fetchUser: async () => {
         const token = get().token;
         if (!token) return;
-
-        // ensure axios has token after refresh
         apiClient.setToken(token);
-
         set({ isLoading: true });
         try {
-          const user = await authService.getCurrentUser();
-          set({ user, isLoading: false, isAuthenticated: true });
+          const u = await authService.getCurrentUser();
+          set({ user: u, isAuthenticated: true, isLoading: false });
         } catch (error) {
-          set({ isLoading: false });
+          // token stale → clear state
+          apiClient.setToken(String(undefined));
+          set({ user: null, token: null, isAuthenticated: false, isLoading: false });
           throw error;
         }
       },
 
       updateUser: async (userData) => {
         const res = await authService.updateProfile(userData);
-        // Laravel returns { user, message } for updateProfile
-        const updated = (res as any)?.user ? (res as any).user : (res as any);
+        const updated = (res as any)?.user ?? (res as any);
         set({ user: updated });
       },
     }),
@@ -104,14 +111,15 @@ export const useAuthStore = create<AuthState>()(
         user: state.user,
         isAuthenticated: state.isAuthenticated,
       }),
-      // After rehydrate, wire token back to axios (and optionally set isAuthenticated)
       onRehydrateStorage: () => (state) => {
         try {
           const token = state?.token;
           if (token) {
             apiClient.setToken(token);
-            // keep store consistent (useful if you ever change partialize fields)
+            // keep flags consistent without extra network calls
             useAuthStore.setState({ isAuthenticated: true });
+            // If you prefer, you can also eagerly refetch:
+            // useAuthStore.getState().fetchUser().catch(() => {});
           }
         } catch {}
       },
@@ -119,8 +127,9 @@ export const useAuthStore = create<AuthState>()(
   )
 );
 
-// —— Keep Zustand in sync with axios on 401 Unauthorized ——
+// —— Global 401 handler → nuke auth and let route guards redirect ——
 apiClient.onUnauthorized(() => {
+  apiClient.setToken(String(undefined));
   useAuthStore.setState({
     user: null,
     token: null,

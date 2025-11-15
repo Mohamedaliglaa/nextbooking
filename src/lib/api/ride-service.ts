@@ -1,12 +1,6 @@
-// lib/api/ride-service.ts
 import { PaginatedResponse } from '@/types';
 import { apiClient } from './client';
-import { 
-  Ride, 
-  RideRequest, 
-  GuestRideRequest,
-  RideEstimation,
-} from '@/types/booking';
+import { Ride, RideRequest, GuestRideRequest, RideEstimation } from '@/types/booking';
 
 export const rideService = {
   async estimateRide(estimationData: Partial<RideEstimation>): Promise<RideEstimation> {
@@ -17,7 +11,6 @@ export const rideService = {
   async requestRide(rideRequest: RideRequest | GuestRideRequest): Promise<Ride> {
     const response = await apiClient.post<Ride>('/rides/request', rideRequest);
     return response.ride!;
-
   },
 
   async getRide(rideId: number): Promise<Ride> {
@@ -29,32 +22,22 @@ export const rideService = {
     try {
       const response = await apiClient.get<Ride>('/rides/current');
       return response.ride || null;
-    } catch (error) {
+    } catch {
       return null;
     }
   },
 
   async cancelRide(rideId: number, reason?: string): Promise<Ride> {
-    const response = await apiClient.post<Ride>(`/rides/${rideId}/cancel`, { 
-      cancellation_reason: reason 
-    });
+    const response = await apiClient.post<Ride>(`/rides/${rideId}/cancel`, { cancellation_reason: reason });
     return response.ride!;
   },
 
-  async getRideHistory(params?: {
-    page?: number;
-    per_page?: number;
-    status?: string;
-  }): Promise<PaginatedResponse<Ride>> {
+  async getRideHistory(params?: { page?: number; per_page?: number; status?: string; }): Promise<PaginatedResponse<Ride>> {
     const response = await apiClient.get<PaginatedResponse<Ride>>('/rides/history', params);
     return response.ride!;
   },
 
-  async getDriverRides(params?: {
-    page?: number;
-    per_page?: number;
-    status?: string;
-  }): Promise<PaginatedResponse<Ride>> {
+  async getDriverRides(params?: { page?: number; per_page?: number; status?: string; }): Promise<PaginatedResponse<Ride>> {
     const response = await apiClient.get<PaginatedResponse<Ride>>('/driver/rides', params);
     return response.ride!;
   },
