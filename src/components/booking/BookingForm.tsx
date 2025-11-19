@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { MapPin, Navigation, Plus, X, ArrowDownUp, Clock, Calendar, DollarSign, AlertCircle } from 'lucide-react';
+import { MapPin, Navigation, Plus, X, ArrowDownUp, Clock, Calendar, DollarSign, AlertCircle, CircleDot, SquareDot, Euro } from 'lucide-react';
 import { VehicleOption, RideEstimation } from '@/types/booking';
 import { calculateEstimatedFare } from '@/lib/utils';
 import Image from 'next/image';
@@ -113,7 +113,7 @@ export default function BookingForm() {
   };
 
   const addStop = () => {
-    setStops((s) => [...s, '']);
+    setStops((prev) => [...prev, '']); // append stop to array
     setTimeout(initializeAutocomplete, 100);
   };
   const removeStop = (index: number) => {
@@ -189,7 +189,7 @@ export default function BookingForm() {
               passenger_count: 1,
               is_scheduled: timeOption === 'scheduled',
               scheduled_at: timeOption === 'scheduled' ? `${scheduledDate}T${scheduledTime}` : undefined,
-              stops: filteredStops, // IMPORTANT: only non-empty
+              stops: filteredStops,
               estimated_distance: Math.round(totalDistance * 10) / 10,
               estimated_duration: Math.round(totalDuration),
               estimated_fare: estimatedPrice,
@@ -227,7 +227,7 @@ export default function BookingForm() {
       passenger_count: 1,
       is_scheduled: timeOption === 'scheduled',
       scheduled_at: timeOption === 'scheduled' ? `${scheduledDate}T${scheduledTime}` : undefined,
-      stops: filteredStops, // IMPORTANT
+      stops: filteredStops,
       estimated_distance: baseDistance,
       estimated_duration: baseDistance * 2,
       estimated_fare: estimatedPrice,
@@ -241,6 +241,7 @@ export default function BookingForm() {
     <div className="w-full">
       <div className="bg-card rounded-xl shadow-lg border border-border overflow-hidden">
         <div className="flex flex-col gap-2 p-6 space-y-4 relative">
+
           {/* Departure */}
           <div>
             <label className="block text-sm font-semibold text-card-foreground mb-2">
@@ -267,45 +268,16 @@ export default function BookingForm() {
             </div>
           </div>
 
-          {/* Switch Button */}
-          <div className="absolute right-6 top-28">
-            <button
-              onClick={switchAddresses}
-              className="p-2 bg-gradient-to-r from-chart-4 to-chart-5 text-primary-foreground rounded-full hover:opacity-90"
-              title="Inverser les adresses"
-            >
-              <ArrowDownUp className="h-4 w-4" />
-            </button>
-          </div>
-
-          {/* Destination */}
-          <div>
-            <label className="block text-sm font-semibold text-card-foreground mb-2">
-              <MapPin className="inline h-4 w-4 mr-2 text-chart-2" />
-              Adresse de destination
-            </label>
-            <input
-              ref={destinationRef}
-              type="text"
-              value={destination}
-              onChange={(e) => setDestination(e.target.value)}
-              placeholder="Adresse de destination"
-              className="w-full px-4 py-3 text-sm bg-background border border-input rounded-lg focus:ring-2 focus:ring-ring"
-            />
-          </div>
-
-          {/* Stops */}
+          {/* Stops between departure and destination */}
           {stops.map((stop, index) => (
             <div key={index}>
               <label className="block text-sm font-semibold text-card-foreground mb-2">
-                <MapPin className="inline h-4 w-4 mr-2 text-chart-1" />
+                <CircleDot className="inline h-4 w-4 mr-2 text-chart-1" />
                 Arrêt {index + 1}
               </label>
               <div className="flex gap-2">
                 <input
-                  ref={(el) => {
-                    stopsRefs.current[index] = el;
-                  }}
+                  ref={(el) => { stopsRefs.current[index] = el; }}
                   type="text"
                   value={stop}
                   onChange={(e) => updateStop(index, e.target.value)}
@@ -330,6 +302,22 @@ export default function BookingForm() {
             <Plus className="h-4 w-4 inline mr-2" />
             Ajouter un arrêt
           </button>
+
+          {/* Destination */}
+          <div>
+            <label className="block text-sm font-semibold text-card-foreground mb-2">
+              <SquareDot className="inline h-4 w-4 mr-2 text-chart-2" />
+              Adresse de destination
+            </label>
+            <input
+              ref={destinationRef}
+              type="text"
+              value={destination}
+              onChange={(e) => setDestination(e.target.value)}
+              placeholder="Adresse de destination"
+              className="w-full px-4 py-3 text-sm bg-background border border-input rounded-lg focus:ring-2 focus:ring-ring"
+            />
+          </div>
 
           {/* Vehicle selection */}
           <div className="grid grid-cols-3 gap-3">
@@ -436,7 +424,7 @@ export default function BookingForm() {
                 </>
               ) : (
                 <>
-                  <DollarSign className="h-5 w-5" />
+                  <Euro className="h-5 w-5" />
                   Faire une estimation
                 </>
               )}
