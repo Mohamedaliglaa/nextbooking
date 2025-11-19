@@ -24,7 +24,7 @@ export default function Header() {
 
   const navigation = [
     { name: 'Services', href: '#services' },
-    { name: 'Devenir chauffeur', href: '/signup' },
+    { name: 'Devenir chauffeur', href: '/auth/signup' },
     { name: 'À propos', href: '#apropos' },
     { name: 'Contact', href: '#contact' },
   ]
