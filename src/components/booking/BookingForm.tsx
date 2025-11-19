@@ -2,19 +2,53 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { MapPin, Navigation, Plus, X, ArrowDownUp, Clock, Calendar, DollarSign, AlertCircle, CircleDot, SquareDot, Euro } from 'lucide-react';
+import {
+  MapPin,
+  Navigation,
+  Plus,
+  X,
+  Clock,
+  Calendar,
+  DollarSign,
+  AlertCircle,
+} from 'lucide-react';
 import { VehicleOption, RideEstimation } from '@/types/booking';
 import { calculateEstimatedFare } from '@/lib/utils';
 import Image from 'next/image';
 import { useToast } from '@/hooks/use-toast';
 import { useBooking } from '@/hooks/use-booking';
 
-declare global { interface Window { google: any; } }
+declare global {
+  interface Window {
+    google: any;
+  }
+}
 
 const vehicles: VehicleOption[] = [
-  { id: 'berline', name: 'Berline', icon: '/Berline-taxi-commande.png', capacity: 4, basePrice: 15, type: 'berline' },
-  { id: 'break',  name: 'Break',  icon: '/Break-taxi-commande.png',  capacity: 4, basePrice: 20, type: 'break'  },
-  { id: 'van',    name: 'Van',    icon: '/Van-taxi-commande.png',    capacity: 7, basePrice: 25, type: 'van'    },
+  {
+    id: 'berline',
+    name: 'Berline',
+    icon: '/Berline-taxi-commande.png',
+    capacity: 4,
+    basePrice: 15,
+    type: 'berline',
+  },
+  {
+    id: 'break',
+    name: 'Break',
+    icon: '/Break-taxi-commande.png',
+    capacity: 4,
+    basePrice: 20,
+    type: 'break',
+  },
+  {
+    id: 'van',
+    name: 'Van',
+    icon: '/Van-taxi-commande.png',
+    capacity: 7,
+    basePrice: 25,
+    type: 'van',
+  },
 ];
 
 export default function BookingForm() {
@@ -26,7 +60,8 @@ export default function BookingForm() {
   const [destination, setDestination] = useState('');
   const [stops, setStops] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const [vehicleType, setVehicleType] = useState<'berline' | 'break' | 'van'>('berline');
+  const [vehicleType, setVehicleType] =
+    useState<'berline' | 'break' | 'van'>('berline');
   const [timeOption, setTimeOption] = useState<'now' | 'scheduled'>('now');
   const [scheduledDate, setScheduledDate] = useState('');
   const [scheduledTime, setScheduledTime] = useState('');
@@ -35,73 +70,157 @@ export default function BookingForm() {
   const destinationRef = useRef<HTMLInputElement>(null);
   const stopsRefs = useRef<(HTMLInputElement | null)[]>([]);
 
+  // Keep track of autocomplete instances so we don't reattach listeners every render
+  const departureAutocompleteRef = useRef<any | null>(null);
+  const destinationAutocompleteRef = useRef<any | null>(null);
+  const stopsAutocompleteRefs = useRef<(any | null)[]>([]);
+
+  const [isMapsLoaded, setIsMapsLoaded] = useState(false);
+  const scriptLoadedRef = useRef(false);
+
   const isVanDisabled = true;
 
+  // ---- Load Google Maps script ONCE ----
   useEffect(() => {
-    if (!window.google) {
-      const script = document.createElement('script');
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=places`;
-      script.async = true;
-      script.defer = true;
-      document.head.appendChild(script);
-      script.onload = initializeAutocomplete;
-    } else {
-      initializeAutocomplete();
-    }
-    return () => { stopsRefs.current = []; };
-  }, [stops]);
+    if (typeof window === 'undefined') return;
 
-  const initializeAutocomplete = () => {
-    if (!window.google) return;
-    const options = { types: ['address'], componentRestrictions: { country: 'fr' } };
-
-    if (departureRef.current) {
-      const ac = new window.google.maps.places.Autocomplete(departureRef.current, options);
-      ac.addListener('place_changed', () => {
-        const p = ac.getPlace();
-        if (p.formatted_address) setDeparture(p.formatted_address);
-      });
+    if (window.google && window.google.maps && window.google.maps.places) {
+      setIsMapsLoaded(true);
+      return;
     }
 
-    if (destinationRef.current) {
-      const ac = new window.google.maps.places.Autocomplete(destinationRef.current, options);
-      ac.addListener('place_changed', () => {
-        const p = ac.getPlace();
-        if (p.formatted_address) setDestination(p.formatted_address);
-      });
+    if (scriptLoadedRef.current) return;
+
+    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      console.error('Missing NEXT_PUBLIC_GOOGLE_MAPS_API_KEY');
+      return;
     }
 
-    stopsRefs.current.forEach((ref, i) => {
-      if (!ref) return;
-      const ac = new window.google.maps.places.Autocomplete(ref, options);
-      ac.addListener('place_changed', () => {
-        const p = ac.getPlace();
-        if (p.formatted_address) updateStop(i, p.formatted_address);
-      });
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => {
+      scriptLoadedRef.current = true;
+      setIsMapsLoaded(true);
+    };
+    script.onerror = () => {
+      console.error('Failed to load Google Maps script');
+    };
+
+    document.head.appendChild(script);
+  }, []);
+
+  // Helper: attach autocomplete to a single input
+  const attachAutocomplete = (
+    input: HTMLInputElement,
+    onSelect: (address: string, place?: any) => void
+  ) => {
+    const options = {
+      types: ['address'],
+      componentRestrictions: { country: 'fr' },
+    };
+
+    const ac = new window.google.maps.places.Autocomplete(input, options);
+    ac.addListener('place_changed', () => {
+      const place = ac.getPlace();
+      if (place?.formatted_address) {
+        onSelect(place.formatted_address, place);
+      }
     });
+
+    return ac;
   };
+
+  // ---- Initialize autocomplete when Maps is ready + when stops count changes ----
+  useEffect(() => {
+    if (!isMapsLoaded || !window.google || !window.google.maps?.places) return;
+
+    // Departure
+    if (departureRef.current && !departureAutocompleteRef.current) {
+      departureAutocompleteRef.current = attachAutocomplete(
+        departureRef.current,
+        (address) => setDeparture(address)
+      );
+    }
+
+    // Destination
+    if (destinationRef.current && !destinationAutocompleteRef.current) {
+      destinationAutocompleteRef.current = attachAutocomplete(
+        destinationRef.current,
+        (address) => setDestination(address)
+      );
+    }
+
+    // Stops - only attach to new ones
+    stopsRefs.current.forEach((input, index) => {
+      if (
+        input &&
+        !stopsAutocompleteRefs.current[index] &&
+        window.google?.maps?.places
+      ) {
+        const ac = attachAutocomplete(input, (address) => {
+          updateStop(index, address);
+        });
+        stopsAutocompleteRefs.current[index] = ac;
+      }
+    });
+
+    // Cleanup on unmount (optional but cleaner)
+    return () => {
+      if (departureAutocompleteRef.current) {
+        window.google.maps.event.clearInstanceListeners(
+          departureAutocompleteRef.current
+        );
+      }
+      if (destinationAutocompleteRef.current) {
+        window.google.maps.event.clearInstanceListeners(
+          destinationAutocompleteRef.current
+        );
+      }
+      stopsAutocompleteRefs.current.forEach((ac) => {
+        if (ac) window.google.maps.event.clearInstanceListeners(ac);
+      });
+    };
+    // We only need to re-run when maps is ready or number of stops changes
+  }, [isMapsLoaded, stops.length]);
 
   const getCurrentLocation = () => {
     setLoading(true);
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(async (pos) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      toast.error(
+        'Géolocalisation non supportée',
+        'Votre navigateur ne supporte pas la géolocalisation'
+      );
+      setLoading(false);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
         const { latitude, longitude } = pos.coords;
         try {
-          const resp = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`);
+          const resp = await fetch(
+            `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`
+          );
           const data = await resp.json();
-          setDeparture(data.results?.[0]?.formatted_address ?? `${latitude}, ${longitude}`);
+          setDeparture(
+            data.results?.[0]?.formatted_address ?? `${latitude}, ${longitude}`
+          );
         } catch {
           setDeparture(`${latitude}, ${longitude}`);
         }
         setLoading(false);
-      }, () => {
-        toast.error('Erreur de géolocalisation', "Impossible d'obtenir votre position actuelle");
+      },
+      () => {
+        toast.error(
+          'Erreur de géolocalisation',
+          "Impossible d'obtenir votre position actuelle"
+        );
         setLoading(false);
-      });
-    } else {
-      toast.error('Géolocalisation non supportée', 'Votre navigateur ne supporte pas la géolocalisation');
-      setLoading(false);
-    }
+      }
+    );
   };
 
   const switchAddresses = () => {
@@ -113,13 +232,21 @@ export default function BookingForm() {
   };
 
   const addStop = () => {
-    setStops((prev) => [...prev, '']); // append stop to array
-    setTimeout(initializeAutocomplete, 100);
+    setStops((prev) => [...prev, '']);
   };
+
   const removeStop = (index: number) => {
     setStops((s) => s.filter((_, i) => i !== index));
+
+    // Remove ref + autocomplete instance at that index
     stopsRefs.current.splice(index, 1);
+    const ac = stopsAutocompleteRefs.current[index];
+    if (ac && window.google?.maps?.event) {
+      window.google.maps.event.clearInstanceListeners(ac);
+    }
+    stopsAutocompleteRefs.current.splice(index, 1);
   };
+
   const updateStop = (index: number, value: string) => {
     setStops((s) => {
       const copy = [...s];
@@ -139,15 +266,29 @@ export default function BookingForm() {
       const now = new Date();
       const oneHourLater = new Date(now.getTime() + 60 * 60 * 1000);
       setScheduledDate(oneHourLater.toISOString().split('T')[0]);
-      setScheduledTime(oneHourLater.toTimeString().split(':').slice(0, 2).join(':'));
+      setScheduledTime(
+        oneHourLater.toTimeString().split(':').slice(0, 2).join(':')
+      );
     }
   };
 
   const calculateEstimation = async () => {
     if (!departure || !destination) {
-      toast.error('Champs manquants', "Veuillez remplir l'adresse de départ et de destination");
+      toast.error(
+        'Champs manquants',
+        "Veuillez remplir l'adresse de départ et de destination"
+      );
       return;
     }
+
+    if (!window.google || !window.google.maps) {
+      toast.error(
+        'Service indisponible',
+        'Google Maps ne semble pas chargé. Veuillez réessayer.'
+      );
+      return;
+    }
+
     setLoading(true);
 
     const filteredStops = stops.filter((s) => s.trim() !== '');
@@ -158,7 +299,12 @@ export default function BookingForm() {
       const destinations = [...filteredStops, destination];
 
       service.getDistanceMatrix(
-        { origins, destinations, travelMode: 'DRIVING', unitSystem: window.google.maps.UnitSystem.METRIC },
+        {
+          origins,
+          destinations,
+          travelMode: 'DRIVING',
+          unitSystem: window.google.maps.UnitSystem.METRIC,
+        },
         (response: any, status: string) => {
           if (status === 'OK') {
             let totalDistance = 0;
@@ -174,8 +320,16 @@ export default function BookingForm() {
             });
 
             const vehicle = vehicles.find((v) => v.id === vehicleType)!;
-            const basePrices = vehicles.reduce((acc, v) => (acc[v.id] = v.basePrice, acc), {} as Record<string, number>);
-            const estimatedPrice = calculateEstimatedFare(totalDistance, totalDuration, vehicleType, basePrices);
+            const basePrices = vehicles.reduce(
+              (acc, v) => ((acc[v.id] = v.basePrice), acc),
+              {} as Record<string, number>
+            );
+            const estimatedPrice = calculateEstimatedFare(
+              totalDistance,
+              totalDuration,
+              vehicleType,
+              basePrices
+            );
 
             const estimationData: RideEstimation = {
               pickup_location: departure,
@@ -188,7 +342,10 @@ export default function BookingForm() {
               vehicle,
               passenger_count: 1,
               is_scheduled: timeOption === 'scheduled',
-              scheduled_at: timeOption === 'scheduled' ? `${scheduledDate}T${scheduledTime}` : undefined,
+              scheduled_at:
+                timeOption === 'scheduled'
+                  ? `${scheduledDate}T${scheduledTime}`
+                  : undefined,
               stops: filteredStops,
               estimated_distance: Math.round(totalDistance * 10) / 10,
               estimated_duration: Math.round(totalDuration),
@@ -212,8 +369,16 @@ export default function BookingForm() {
   const calculateFallbackEstimation = (filteredStops: string[]) => {
     const vehicle = vehicles.find((v) => v.id === vehicleType)!;
     const baseDistance = 10 + filteredStops.length * 5;
-    const basePrices = vehicles.reduce((acc, v) => (acc[v.id] = v.basePrice, acc), {} as Record<string, number>);
-    const estimatedPrice = calculateEstimatedFare(baseDistance, baseDistance * 2, vehicleType, basePrices);
+    const basePrices = vehicles.reduce(
+      (acc, v) => ((acc[v.id] = v.basePrice), acc),
+      {} as Record<string, number>
+    );
+    const estimatedPrice = calculateEstimatedFare(
+      baseDistance,
+      baseDistance * 2,
+      vehicleType,
+      basePrices
+    );
 
     const estimationData: RideEstimation = {
       pickup_location: departure,
@@ -226,7 +391,10 @@ export default function BookingForm() {
       vehicle,
       passenger_count: 1,
       is_scheduled: timeOption === 'scheduled',
-      scheduled_at: timeOption === 'scheduled' ? `${scheduledDate}T${scheduledTime}` : undefined,
+      scheduled_at:
+        timeOption === 'scheduled'
+          ? `${scheduledDate}T${scheduledTime}`
+          : undefined,
       stops: filteredStops,
       estimated_distance: baseDistance,
       estimated_duration: baseDistance * 2,
@@ -241,7 +409,6 @@ export default function BookingForm() {
     <div className="w-full">
       <div className="bg-card rounded-xl shadow-lg border border-border overflow-hidden">
         <div className="flex flex-col gap-2 p-6 space-y-4 relative">
-
           {/* Departure */}
           <div>
             <label className="block text-sm font-semibold text-card-foreground mb-2">
@@ -272,12 +439,14 @@ export default function BookingForm() {
           {stops.map((stop, index) => (
             <div key={index}>
               <label className="block text-sm font-semibold text-card-foreground mb-2">
-                <CircleDot className="inline h-4 w-4 mr-2 text-chart-1" />
+                <MapPin className="inline h-4 w-4 mr-2 text-chart-1" />
                 Arrêt {index + 1}
               </label>
               <div className="flex gap-2">
                 <input
-                  ref={(el) => { stopsRefs.current[index] = el; }}
+                  ref={(el) => {
+                    stopsRefs.current[index] = el;
+                  }}
                   type="text"
                   value={stop}
                   onChange={(e) => updateStop(index, e.target.value)}
@@ -306,7 +475,7 @@ export default function BookingForm() {
           {/* Destination */}
           <div>
             <label className="block text-sm font-semibold text-card-foreground mb-2">
-              <SquareDot className="inline h-4 w-4 mr-2 text-chart-2" />
+              <MapPin className="inline h-4 w-4 mr-2 text-chart-2" />
               Adresse de destination
             </label>
             <input
@@ -346,12 +515,14 @@ export default function BookingForm() {
                       src={vehicle.icon}
                       alt={vehicle.name}
                       fill
-                      className={`object-contain ${disabled ? 'grayscale' : ''}`}
+                      className={`object-contain ${
+                        disabled ? 'grayscale' : ''
+                      }`}
                     />
                   </div>
                   <div className="text-sm font-semibold">{vehicle.name}</div>
                   <div className="text-xs mt-1 text-muted-foreground">
-                    Jusqu'à {vehicle.capacity} passagers
+                    Jusqu&apos;à {vehicle.capacity} passagers
                   </div>
                 </button>
               );
@@ -388,7 +559,9 @@ export default function BookingForm() {
             {timeOption === 'scheduled' && (
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm text-muted-foreground mb-2">Date</label>
+                  <label className="block text-sm text-muted-foreground mb-2">
+                    Date
+                  </label>
                   <input
                     type="date"
                     value={scheduledDate}
@@ -398,7 +571,9 @@ export default function BookingForm() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-muted-foreground mb-2">Heure</label>
+                  <label className="block text-sm text-muted-foreground mb-2">
+                    Heure
+                  </label>
                   <input
                     type="time"
                     value={scheduledTime}
@@ -419,19 +594,20 @@ export default function BookingForm() {
             >
               {loading ? (
                 <>
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
                   Calcul en cours...
                 </>
               ) : (
                 <>
-                  <Euro className="h-5 w-5" />
+                  <DollarSign className="h-5 w-5" />
                   Faire une estimation
                 </>
               )}
             </button>
 
             <p className="text-xs text-muted-foreground text-center">
-              💡 Cette estimation est indicative. Le prix final peut varier selon le trafic.
+              💡 Cette estimation est indicative. Le prix final peut varier selon le
+              trafic.
             </p>
           </div>
         </div>
