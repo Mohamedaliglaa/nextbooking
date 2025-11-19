@@ -25,6 +25,7 @@ export const DriverSidebarLinks: NavItem[] = [
   { href: '/driver/dashboard/rides', label: 'Courses', icon: RouteIcon, badgeKey: 'availableRides' },
   { href: '/driver/dashboard/earnings', label: 'Gains', icon: Wallet },
   { href: '/driver/dashboard/profile', label: 'Profil', icon: UserCog },
+  { href: '/driver/dashboard/active-ride', label: 'Course active', icon: RouteIcon },
 ];
 
 // ---- Small utility (no external deps)
